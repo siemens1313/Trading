@@ -144,10 +144,11 @@ Unknown keys are rejected, so a typo can't silently fall back to a default.
 
 ### Limits
 
-- **The fetchers are untested against the live endpoints.** The build sandbox's network
-  policy blocks every market-data host, so the parsers are tested against fixtures in each
-  endpoint's published format (`tests/test_sources.py`). If a format has drifted, that
-  source shows up under **Data** and its items fall back to manual inputs or UNKNOWN.
+- **Live sources, as checked from GitHub's runners on 10/28/2026:** Cboe (VIX, VIX3M, VXN,
+  put/call, daily closes) and SqueezeMetrics answer. CNN refuses automated requests
+  (HTTP 418), so enter `fear_greed` by hand if you want it; Yahoo rate-limits GitHub's
+  runners and Stooq serves an HTML page, so both are only fallbacks. A source that stops
+  answering shows up under **Data**, and its items fall back to manual inputs or UNKNOWN.
 - Every GEX figure is a model estimate; public open interest can't prove dealers' real
   positioning. Stick to one source over time.
 - The 10% / 20%-of-float thresholds are written for single stocks; ETF short interest
