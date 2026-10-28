@@ -6,7 +6,8 @@ from contextlib import redirect_stderr, redirect_stdout
 from datetime import date, timedelta
 from pathlib import Path
 
-from bottom_bots.cli import main
+from bottom_bots.cli import main, market_today, resolve_as_of
+from bottom_bots.store import SeriesStore
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "inputs" / "manual.example.toml"
 
@@ -44,6 +45,43 @@ def capitulation_inputs() -> str:
             rows("aaii_bearish", list(zip(fridays[4:], [40, 52, 58, 54, 49]))),
         ]
     )
+
+
+class AsOfTest(unittest.TestCase):
+    def test_last_session_is_the_latest_vix_close_before_today(self):
+        store = SeriesStore()
+        for day, value in ((date(2026, 10, 23), 19.45), (date(2026, 10, 26), 18.39), (date(2026, 10, 27), 17.52)):
+            store.add("vix", day, value, "test")
+        # Run on 10/27: that day's close isn't final, so the report covers 10/26.
+        self.assertEqual(resolve_as_of("last-session", store, date(2026, 10, 27)), date(2026, 10, 26))
+
+    def test_a_holiday_maps_onto_the_session_before_it(self):
+        store = SeriesStore()
+        store.add("vix", date(2026, 11, 25), 18.0, "test")  # Wednesday; Thanksgiving has no close
+        self.assertEqual(resolve_as_of("last-session", store, date(2026, 11, 27)), date(2026, 11, 25))
+
+    def test_without_vix_data_it_is_the_previous_weekday(self):
+        self.assertEqual(resolve_as_of("last-session", SeriesStore(), date(2026, 10, 26)), date(2026, 10, 23))
+        self.assertEqual(resolve_as_of("last-session", SeriesStore(), date(2026, 10, 28)), date(2026, 10, 27))
+
+    def test_fixed_dates_and_today_pass_through(self):
+        self.assertEqual(resolve_as_of(date(2026, 1, 2), SeriesStore(), date(2026, 10, 28)), date(2026, 1, 2))
+        self.assertEqual(resolve_as_of("today", SeriesStore(), date(2026, 10, 28)), date(2026, 10, 28))
+
+    def test_cli_resolves_last_session_from_the_inputs(self):
+        today = market_today()
+        days = [today - timedelta(days=n) for n in (3, 2, 1, 0)]
+        with tempfile.TemporaryDirectory() as tmp:
+            inputs = Path(tmp) / "inputs.toml"
+            inputs.write_text(rows("vix", [(d, 20.0) for d in days]))
+            code, out = run_cli("run", "--offline", "--manual", str(inputs), "--as-of", "last-session", "--no-save", "--json")
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["as_of"], days[-2].isoformat())
+
+    def test_cli_rejects_an_unknown_as_of(self):
+        with self.assertRaises(SystemExit) as raised, redirect_stderr(io.StringIO()):
+            main(["run", "--as-of", "yesterday"])
+        self.assertEqual(raised.exception.code, 2)
 
 
 class CliTest(unittest.TestCase):

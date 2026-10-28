@@ -6,8 +6,9 @@ import argparse
 import json
 import sys
 import tomllib
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from . import config, manual, report, sources
 from .bots import SENSOR_BOTS, AggregatorBot, run_sensors
@@ -17,6 +18,40 @@ from .sources.http import get
 from .store import SeriesStore
 
 DEFAULT_MANUAL = Path("inputs/manual.toml")
+AS_OF_KEYWORDS = ("today", "last-session")
+
+
+def market_today() -> date:
+    """Today's date in New York, where the sessions the bots read are dated."""
+    try:
+        return datetime.now(ZoneInfo("America/New_York")).date()
+    except ZoneInfoNotFoundError:
+        return date.today()
+
+
+def resolve_as_of(value: date | str, store: SeriesStore, today: date) -> date:
+    if isinstance(value, date):
+        return value
+    if value == "today":
+        return today
+    # last-session: the latest VIX close before today, so a holiday or a rerun maps onto the
+    # session it actually covers; with no VIX data at all, the previous weekday.
+    sessions = [p.day for p in store.series("vix") if p.day < today]
+    if sessions:
+        return sessions[-1]
+    day = today - timedelta(days=1)
+    while day.weekday() >= 5:
+        day -= timedelta(days=1)
+    return day
+
+
+def _as_of_arg(text: str) -> date | str:
+    if text in AS_OF_KEYWORDS:
+        return text
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected YYYY-MM-DD, 'today' or 'last-session', got {text!r}") from None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -38,7 +73,12 @@ def _parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     run = sub.add_parser("run", help="fetch data, run all six bots, print the checklist")
-    run.add_argument("--as-of", type=date.fromisoformat, default=date.today(), help="run date, YYYY-MM-DD")
+    run.add_argument(
+        "--as-of",
+        type=_as_of_arg,
+        default="today",
+        help="YYYY-MM-DD, 'today' (New York date, the default) or 'last-session' (the latest VIX close before today)",
+    )
     run.add_argument(
         "--manual",
         type=Path,
@@ -70,25 +110,28 @@ def _run(args: argparse.Namespace) -> int:
     cfg = config.load(args.config)
     cache = args.state_dir / "series.json"
     store = SeriesStore.load(cache)
-    data_warnings = [] if args.offline else sources.refresh(store, cfg, args.as_of)
+    today = market_today()
+    fetch_until = args.as_of if isinstance(args.as_of, date) else today
+    data_warnings = [] if args.offline else sources.refresh(store, cfg, fetch_until)
 
     manual_paths = args.manual or ([DEFAULT_MANUAL] if DEFAULT_MANUAL.exists() else [])
     for path in manual_paths:
         manual.load_into(store, path)
     if not manual_paths:
         data_warnings.append(f"no manual inputs ({DEFAULT_MANUAL} not found): manual-only items will be UNKNOWN")
+    as_of = resolve_as_of(args.as_of, store, today)
 
     if args.bot:
-        results = run_sensors(cfg, store, args.as_of, set(args.bot))
+        results = run_sensors(cfg, store, as_of, set(args.bot))
         if args.json:
             print(json.dumps([r.to_dict() for r in results], indent=2, ensure_ascii=False))
         else:
-            print(report.render_sensors(results, args.as_of, data_warnings), end="")
+            print(report.render_sensors(results, as_of, data_warnings), end="")
         return 0
 
     history = History.load(args.state_dir / "history.json")
     judge = AggregatorBot(cfg)
-    verdict = judge.evaluate(run_sensors(cfg, store, args.as_of), history.before(args.as_of), args.as_of)
+    verdict = judge.evaluate(run_sensors(cfg, store, as_of), history.before(as_of), as_of)
     markdown = report.render_markdown(verdict, data_warnings)
     print(report.render_json(verdict, data_warnings) + "\n" if args.json else markdown, end="")
 
@@ -96,7 +139,7 @@ def _run(args: argparse.Namespace) -> int:
         store.save(cache)
         history.put(judge.record(verdict))
         history.save(args.state_dir / "history.json")
-        out = args.state_dir / "reports" / f"{args.as_of.isoformat()}.md"
+        out = args.state_dir / "reports" / f"{as_of.isoformat()}.md"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(markdown)
     return 0
