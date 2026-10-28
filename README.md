@@ -134,7 +134,7 @@ Unknown keys are rejected, so a typo can't silently fall back to a default.
 | Total / Index / Equity put/call — Cboe daily statistics | SOXX + SMH weekly net flows — ETF.com |
 | GEX, DIX, SPX close — SqueezeMetrics `DIX.csv` | AAII bearish %, NAAIM exposure |
 | Fear & Greed — CNN | % of S&P 500 above the 200-day — Barchart / StockCharts |
-| Daily closes — Yahoo chart API, then Stooq | gamma flip level — SpotGamma / your model |
+| Daily closes — Cboe chart history, then Yahoo, then Stooq | gamma flip level — SpotGamma / your model |
 
 - A manual number beats a fetched one for the same day.
 - A reading older than its `[staleness_days]` limit counts as missing: 5 days for daily

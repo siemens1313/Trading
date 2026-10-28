@@ -103,10 +103,32 @@ class OtherSourcesTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             prices.parse_stooq_csv("No data")
 
+    def test_stooq_html_page_is_reported_plainly(self):
+        with self.assertRaisesRegex(ValueError, "HTML page"):
+            prices.parse_stooq_csv('<!DOCTYPE html><html><head><meta charset="utf-8">')
+
+    def test_cboe_chart_history(self):
+        payload = {"data": [{"date": "2026-10-26", "close": "491.83"}, {"date": "2026-10-27", "close": 511.17}, {"x": 1}]}
+        self.assertEqual(
+            prices.parse_cboe_history(payload), [(date(2026, 10, 26), 491.83), (date(2026, 10, 27), 511.17)]
+        )
+        with self.assertRaises(ValueError):
+            prices.parse_cboe_history({"error": "not found"})
+
+    def test_prices_try_cboe_first(self):
+        requested = []
+
+        def fetch(url):
+            requested.append(url)
+            return json.dumps({"data": [{"date": "2026-10-27", "close": 7723.0}]}).encode()
+
+        self.assertEqual(prices.fetch_closes("SPX", fetch), [("close:SPX", date(2026, 10, 27), 7723.0, "cboe")])
+        self.assertTrue(requested[0].endswith("/charts/historical/_SPX.json"))
+
     def test_prices_fall_back_to_stooq(self):
         def fetch(url):
-            if "yahoo" in url:
-                raise FetchError("HTTP 429")
+            if "cboe" in url or "yahoo" in url:
+                raise FetchError("HTTP 429", 429)
             return b"Date,Open,High,Low,Close,Volume\n2026-10-22,250,255,248,251.2,1000\n"
 
         self.assertEqual(prices.fetch_closes("SOXX", fetch), [("close:SOXX", date(2026, 10, 22), 251.2, "stooq")])

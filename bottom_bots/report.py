@@ -10,7 +10,7 @@ from .bots import SENSOR_BOTS, AggregatorBot
 from .bots.aggregator import Verdict
 from .models import BotResult
 
-AUTO_METRICS = "VIX, VIX3M, VXN and put/call ratios (Cboe); GEX and DIX (SqueezeMetrics); Fear & Greed (CNN); closes (Yahoo, then Stooq)"
+AUTO_METRICS = "VIX, VIX3M, VXN and put/call ratios (Cboe); GEX and DIX (SqueezeMetrics); Fear & Greed (CNN); closes (Cboe, then Yahoo, then Stooq)"
 MANUAL_ONLY = "si_pct_float, days_to_cover, borrow_fee, etf_flows_weekly, aaii_bearish, naaim, breadth_200dma, gamma_flip"
 DISCLAIMER = "_A checklist for reading the market, not investment advice. The plan is a dry run; no order is ever sent._"
 
