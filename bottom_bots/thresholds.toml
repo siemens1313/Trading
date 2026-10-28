@@ -1,0 +1,81 @@
+# Thresholds for the six bots.
+# Numbers quoted from the article carry the line they came from. Numbers marked
+# [default] are choices the article doesn't make — tune them with --config.
+
+[staleness_days]
+# A reading older than this (calendar days before the run date) counts as missing.
+vix = 5
+vix3m = 5
+vxn = 5
+pc_equity = 5
+pc_total = 5
+pc_index = 5
+gex = 5
+dix = 5
+gamma_flip = 5
+close = 5
+si_pct_float = 30        # FINRA/Nasdaq publish twice a month, a week+ late ("每月公布两次，滞后一周多")
+days_to_cover = 30
+borrow_fee = 5
+etf_flows_weekly = 10
+aaii_bearish = 10        # weekly, Thursdays ("AAII每周四公布")
+fear_greed = 5
+naaim = 10               # weekly
+breadth_200dma = 5
+
+[volatility]             # Bot 1 — checklist item 1
+vix_stressed = 30.0          # "30以上算明显紧张"
+vix_extreme = 40.0           # "40以上属于极端"
+term_ratio_inverted = 1.0    # "VIX除以VIX3M，大于1 … 期限结构倒挂"
+vxn_spread_alert = 5.0       # [default] VXN − VIX gap that marks fear concentrated in the Nasdaq-100
+vxn_trend_sessions = 5       # [default] "如果VXN开始下降" = VXN below its value N sessions ago
+semis_symbol = "SOXX"        # "但 $SOXX 仍然持续创新低"
+semis_low_lookback = 20      # [default] a close at or below the prior N-session low is a new low
+
+[put_call]               # Bot 2 — checklist item 2
+equity_capitulation = 0.80   # "Equity Put/Call升到0.8到1.0以上，历史上多出现在急跌末段"
+equity_euphoria = 0.50       # "跌到0.5以下说明追涨情绪过热"
+percentile_sessions = 252    # [default] one trading year, as in "高于过去一年86%的交易日"
+percentile_min_points = 60   # [default] fewer points than this and no percentile is reported
+
+[gamma]                  # Bot 3 — checklist item 3
+underlying = "SPX"           # price compared with gamma_flip; use "QQQ" for a QQQ-chain model
+negative_lookback = 20       # [default] "从负转正": net gamma must have been < 0 in the last N readings
+dix_strong = 45.0            # "SqueezeMetrics把DIX高于45%当作暗池买盘偏强的参考"
+
+[short_interest]         # Bot 4 — checklist item 4
+symbol = "SOXX"              # [default] the article's focus; its SI thresholds are written for stocks
+pct_float_elevated = 10.0    # "空头占流通盘超过10%算偏高"
+pct_float_crowded = 20.0     # "超过20%属于拥挤"
+days_to_cover_long = 5.0     # "Days to Cover超过5天，回补需要的时间就很长"
+low_lookback = 60            # [default] sessions searched for the prior low
+no_new_low_sessions = 5      # [default] "价格却不再创新低" = the low is at least N sessions old
+ignition_sma = 20            # [default] "价格开始涨才是点火" = close above its N-session average
+
+[flows_sentiment]        # Bot 5 — checklist item 5
+etfs = ["SOXX", "SMH"]       # "重点看 $SOXX $SMH 是持续流出还是开始回流" — enter their combined weekly flow
+inflow_weeks = 3             # [default] "连续流入" = the last N weekly flows are all inflows
+prior_outflow_weeks = 4      # [default] "从流出转为" = the N weeks before that net out as outflows
+aaii_extreme = 50.0          # "AAII看空比例 … 超过50%算极端"
+aaii_mean = 31.5             # "历史均值31.5%"
+aaii_peak_lookback_weeks = 8 # [default] bearish % must have topped aaii_extreme within this window
+fear_greed_extreme = 25.0    # "CNN Fear & Greed低于25是极度恐惧"
+fear_greed_rare = 10.0       # "低于10很少见"
+breadth_washout = 20.0       # "站上200日均线的股票比例跌到20%以下，属于普跌式出清"
+naaim_high = 80.0            # [default] managers this long haven't capitulated (87.7 on 10/23)
+require = "all"              # [default] "all": flows AND AAII must confirm; "any": either one
+
+[aggregator]             # Bot 6 — the judge
+oversold_min = 1             # "满足一两条，只能算超跌"
+capitulation_min = 4         # "四五条同时出现，才接近历史上那种投降式底部"
+persistence_runs = 2         # [default] a score must hold this many consecutive daily runs to count
+money_back_gate = true       # "底部猜不出来，钱回来了才算数": without item 5, deployment stops one tier short of capitulation
+
+[plan]
+# Cumulative share of the cash reserve deployed at each persistent score (index = score 0..5).
+# [default] — the article gives no percentages, only
+# "我宁愿错过最低点，也不愿在真正便宜的价格到来之前，就提前打光所有子弹". The last tranche stays
+# below 100% on purpose.
+tranches = [0.0, 0.0, 0.0, 0.25, 0.50, 0.75]
+reserve_cash = 0.0           # dollars set aside for this strategy; 0 = report percentages only
+instruments = { QQQ = 0.5, RSP = 0.5 }   # [default] from your watchlist; weights must sum to 1
