@@ -67,26 +67,29 @@ intraday prices aren't closes):
    `short_sale_volume` is rejected on purpose: short-sale volume ≠ short interest.
 2. `python -m bottom_bots run` — the report prints and is saved to `state/reports/<date>.md`.
 
-### Daily schedule (GitHub Actions)
+### Daily schedule (GitHub Actions + email)
 
-`.github/workflows/daily.yml` runs the bots every weekday and posts the report as a
-comment on the **Daily bottom checklist** issue around **noon Chicago time**,
-@mentioning you so GitHub emails it (on by default for @mentions; see your GitHub
-notification settings).
+`.github/workflows/daily.yml` runs the bots every weekday at **11:50 Chicago time** and
+saves the day's result to the `bottom-bots-state` branch; a scheduled task in Claude
+picks it up at 12:05 and emails it to you from your Gmail.
 
 - It scores the **last completed session** (`--as-of last-session`): at noon today's
   closes don't exist yet, so Wednesday's report covers Tuesday's close.
 - GitHub cron is UTC, so the workflow schedules 11:50 in both Central daylight and
   standard time and `scripts/daily.sh` keeps the entry that matches the day.
-- State (the data cache, the run history and every report) lives on the
-  `bottom-bots-state` branch, so the persistence rule and the tranche ratchet carry over.
+- State (the data cache, the run history and every report) lives on
+  `bottom-bots-state`, so the persistence rule and the tranche ratchet carry over. Each
+  run also writes `latest.md`, `latest.html`, `latest.txt` and `latest.json` there; the
+  email sends `latest.html` and `latest.txt` exactly as rendered.
 - A day with no new session (a market holiday, or a failed VIX download) gets a short
   note with the data warnings instead of a repeat report.
 - Manual inputs are read from `inputs/manual.toml` on `main`; commit updates there.
 - Run it on demand from the Actions tab: **daily checklist → Run workflow**.
-- On pull requests the same job runs against live data without saving or posting.
+- On pull requests the same job runs against live data without saving.
+- The repository is public, so `bottom-bots-state`, with every report, is public too.
 
-GitHub runs schedules only from the default branch, and can start one a few minutes late.
+GitHub runs schedules only from the default branch, and can start one a few minutes
+late; if the 12:05 email finds no result from today, it says so instead.
 
 To run it on your own machine instead — cron uses the machine's time zone, so pick an
 hour after the US close there; `TZ` makes the run date the New York trading day:

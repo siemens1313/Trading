@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import html
 import json
+import re
 from datetime import date
 from typing import Iterable
 
@@ -76,6 +78,96 @@ def render_sensors(results: list[BotResult], as_of: date, data_warnings: Iterabl
 
 def render_json(verdict: Verdict, data_warnings: Iterable[str] = ()) -> str:
     return json.dumps({**verdict.to_dict(), "data_warnings": list(data_warnings)}, indent=2, ensure_ascii=False)
+
+
+_BOLD = re.compile(r"\*\*(.+?)\*\*")
+_ITALIC = re.compile(r"(?<![\w*])_(?!\s)(.+?)(?<!\s)_(?![\w*])")  # _note_, not us_indices/daily_prices
+_CODE = re.compile(r"`([^`]+)`")
+_CELL = "padding:6px 8px;border:1px solid #ddd;text-align:left;vertical-align:top"
+
+
+def _inline_html(text: str) -> str:
+    text = _CODE.sub(r"<code>\1</code>", html.escape(text, quote=False))
+    return _ITALIC.sub(r"<i>\1</i>", _BOLD.sub(r"<b>\1</b>", text))
+
+
+def _inline_text(text: str) -> str:
+    return _ITALIC.sub(r"\1", _BOLD.sub(r"\1", _CODE.sub(r"\1", text)))
+
+
+def _table_row(line: str) -> list[str] | None:
+    """Cells of a Markdown table row, or None for the |---| separator."""
+    stripped = line.strip()
+    if set(stripped) <= set("|-: "):
+        return None
+    return [cell.strip() for cell in stripped.strip("|").split("|")]
+
+
+def markdown_to_html(markdown: str) -> str:
+    """The report's Markdown (headings, one table, bullets, bold, italics) as email-safe HTML."""
+    parts: list[str] = []
+    items: list[tuple[str, bool]] = []
+    rows: list[list[str]] = []
+
+    def flush() -> None:
+        if items:
+            lis = "".join(f'<li style="margin-left:{18 if nested else 0}px">{text}</li>' for text, nested in items)
+            parts.append(f'<ul style="margin:0 0 10px;padding-left:20px">{lis}</ul>')
+            items.clear()
+        if rows:
+            head, *body = rows
+            cells = "".join(f'<th style="{_CELL};background:#f2f2f2">{_inline_html(c)}</th>' for c in head)
+            body_html = "".join(
+                "<tr>" + "".join(f'<td style="{_CELL}">{_inline_html(c)}</td>' for c in row) + "</tr>" for row in body
+            )
+            parts.append(
+                f'<table style="border-collapse:collapse;width:100%;font-size:13px;margin:0 0 10px">'
+                f"<tr>{cells}</tr>{body_html}</table>"
+            )
+            rows.clear()
+
+    for line in markdown.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("|"):
+            if items:
+                flush()
+            row = _table_row(stripped)
+            if row is not None:
+                rows.append(row)
+            continue
+        if rows:
+            flush()
+        if stripped.startswith("- "):
+            items.append((_inline_html(stripped[2:]), line.startswith("  ")))
+            continue
+        flush()
+        if not stripped:
+            continue
+        if stripped.startswith("## "):
+            parts.append(f'<h3 style="margin:16px 0 6px">{_inline_html(stripped[3:])}</h3>')
+        elif stripped.startswith("# "):
+            parts.append(f'<h2 style="margin:0 0 6px">{_inline_html(stripped[2:])}</h2>')
+        else:
+            parts.append(f'<p style="margin:0 0 8px">{_inline_html(stripped)}</p>')
+    flush()
+    style = "font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5;color:#1a1a1a"
+    return f'<div style="{style};max-width:720px">\n' + "\n".join(parts) + "\n</div>\n"
+
+
+def markdown_to_text(markdown: str) -> str:
+    """The report's Markdown as plain text: no emphasis markers, table rows joined with ' · '."""
+    lines = []
+    for line in markdown.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("|"):
+            row = _table_row(stripped)
+            if row is not None:
+                lines.append(" · ".join(_inline_text(c) for c in row))
+        elif stripped.startswith("#"):
+            lines.append(_inline_text(stripped.lstrip("#").strip()))
+        else:
+            lines.append(_inline_text(line.rstrip()))
+    return "\n".join(lines).strip() + "\n"
 
 
 def render_catalog() -> str:
