@@ -135,10 +135,46 @@ class RobinhoodProvider(DataProvider):
         return out
 
 
+class ConnectorFileProvider(CSVProvider):
+    """Bars from data/*.csv and live quotes from data/quotes.json, both written by `quantbot ingest-*`
+    from data Claude fetched via the Robinhood connector. Refuses stale quotes."""
+
+    def __init__(self, data_dir, max_age_minutes: float = 30.0):
+        super().__init__(data_dir)
+        self.max_age = max_age_minutes
+
+    def _load(self, symbols):
+        import json
+        from datetime import datetime, timezone
+        p = self.dir / "quotes.json"
+        if not p.exists():
+            raise RuntimeError("no data/quotes.json; run `python -m quantbot ingest-quotes` first")
+        doc = json.loads(p.read_text())
+        now = datetime.now(timezone.utc)
+        out = {}
+        for s in symbols:
+            q = doc["quotes"].get(s)
+            if q is None:
+                raise RuntimeError(f"no quote for {s}")
+            age = (now - datetime.fromisoformat(q["time"].replace("Z", "+00:00"))).total_seconds() / 60
+            if age > self.max_age:
+                raise RuntimeError(f"quote for {s} is {age:.0f} min old (max {self.max_age:.0f}); refetch quotes")
+            out[s] = q
+        return out
+
+    def latest_prices(self, symbols):
+        return {s: q["last"] for s, q in self._load(symbols).items()}
+
+    def quotes(self, symbols, half_spread_bps):
+        return {s: Quote(q["bid"], q["ask"], q["last"]) for s, q in self._load(symbols).items()}
+
+
 def make_provider(cfg) -> DataProvider:
     kind = cfg.general.data_provider
     if kind == "csv":
         return CSVProvider(cfg.path(cfg.general.data_dir))
+    if kind == "connector":
+        return ConnectorFileProvider(cfg.path(cfg.general.data_dir), cfg.general.max_quote_age_minutes)
     if kind == "yahoo":
         return YahooProvider()
     if kind == "robinhood":

@@ -1,6 +1,6 @@
 __pycache__/
 *.pyc
 .pytest_cache/
-state/
 reports/
 .env
+quantbot-v2.tar.gz

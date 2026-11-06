@@ -4,10 +4,12 @@
 
 [general]
 mode = "paper"              # "paper" (simulated fills) | "live" (real Robinhood orders, see README)
-data_provider = "csv"       # "csv" (offline, data/*.csv) | "yahoo" (yfinance) | "robinhood" (robin_stocks)
+data_provider = "connector" # "connector": data Claude fetched via the Robinhood connector (see AUTOPILOT.md)
+                            # "csv" (offline replay) | "yahoo" (yfinance) | "robinhood" (robin_stocks, on your own machine)
 data_dir = "data"
 state_dir = "state"
 reports_dir = "reports"
+max_quote_age_minutes = 30  # connector mode refuses to trade on quotes older than this
 
 [universe]
 symbols = [

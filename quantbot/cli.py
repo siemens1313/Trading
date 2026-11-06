@@ -176,6 +176,21 @@ def cmd_update_data(cfg, a):
         print(f"{s}: {len(df)} bars {df.index[0].date()} -> {df.index[-1].date()}")
 
 
+def cmd_ingest_bars(cfg, a):
+    from .ingest import ingest_bars
+    res = ingest_bars(a.files, cfg.path(cfg.general.data_dir), cfg.universe.symbols)
+    last = sorted({d for d, _ in res.values()})
+    print(f"ingested daily bars for {len(res)} symbols; last completed session {last[-1]}; "
+          f"{min(n for _, n in res.values())}-{max(n for _, n in res.values())} bars each")
+
+
+def cmd_ingest_quotes(cfg, a):
+    from .ingest import ingest_quotes
+    doc = ingest_quotes(a.file, cfg.path(cfg.general.data_dir), cfg.universe.symbols,
+                        max_age_minutes=cfg.general.max_quote_age_minutes)
+    print(f"ingested {len(doc['quotes'])} validated quotes at {doc['ingested_at']}")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="quantbot", description="Desk-style systematic trading bot (paper first)")
     ap.add_argument("-c", "--config", default="config.toml")
@@ -203,8 +218,30 @@ def main(argv=None):
     rp.add_argument("--yes", action="store_true")
     u = sub.add_parser("update-data", help="refresh data/*.csv")
     u.add_argument("--source", choices=["yahoo", "robinhood"], default="yahoo")
+    sub.add_parser("clock", help="exit 0 if the regular session is open now, else 1")
+    ib = sub.add_parser("ingest-bars", help="load get_equity_historicals JSON saved by Claude Code into data/*.csv")
+    ib.add_argument("files", nargs="+")
+    iq = sub.add_parser("ingest-quotes", help="validate and load quote lines written from get_equity_quotes")
+    iq.add_argument("file")
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     cfg = load_config(a.config)
-    {"backtest": cmd_backtest, "research": cmd_research, "run": cmd_run, "loop": cmd_loop, "status": cmd_status,
-     "resume": cmd_resume, "reset-paper": cmd_reset_paper, "update-data": cmd_update_data}[a.cmd](cfg, a)
+    from .ingest import IngestError
+    try:
+        _dispatch(cfg, a)
+    except IngestError as e:
+        sys.exit(f"ERROR: {e}")
+
+
+def cmd_clock(cfg, a):
+    from datetime import datetime
+    now = datetime.now(NY)
+    is_open = market_open(now)
+    print(f"{now:%Y-%m-%d %H:%M %Z}  regular session open: {is_open}  (exchange holidays are caught by stale quotes)")
+    sys.exit(0 if is_open else 1)
+
+
+def _dispatch(cfg, a):
+    {"clock": cmd_clock, "backtest": cmd_backtest, "research": cmd_research, "run": cmd_run, "loop": cmd_loop, "status": cmd_status,
+     "resume": cmd_resume, "reset-paper": cmd_reset_paper, "update-data": cmd_update_data, "ingest-bars": cmd_ingest_bars,
+     "ingest-quotes": cmd_ingest_quotes}[a.cmd](cfg, a)

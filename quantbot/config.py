@@ -12,6 +12,7 @@ class GeneralCfg:
     data_dir: str = "data"
     state_dir: str = "state"
     reports_dir: str = "reports"
+    max_quote_age_minutes: float = 30.0
 
 
 @dataclass
@@ -101,7 +102,7 @@ class Config:
         g, p, a = self.general, self.portfolio, self.alphas
         if g.mode not in ("paper", "live"):
             raise ValueError(f"general.mode must be 'paper' or 'live', got {g.mode!r}")
-        if g.data_provider not in ("csv", "yahoo", "robinhood"):
+        if g.data_provider not in ("csv", "connector", "yahoo", "robinhood"):
             raise ValueError(f"unknown data_provider {g.data_provider!r}")
         if p.rebalance not in ("daily", "weekly"):
             raise ValueError("portfolio.rebalance must be 'daily' or 'weekly'")
