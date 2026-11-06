@@ -1,0 +1,39 @@
+# quantbot configuration
+# Start in paper mode. Do not switch to live until paper results over several weeks match the backtest.
+
+[general]
+mode = "paper"              # "paper" (simulated fills) | "live" (real Robinhood orders, see README)
+data_provider = "csv"       # "csv" (offline, data/*.csv) | "yahoo" (yfinance) | "robinhood" (robin_stocks)
+data_dir = "data"
+state_dir = "state"
+reports_dir = "reports"
+
+[universe]
+# Diversified, liquid ETFs: US large/small cap, intl developed/emerging, bonds, gold, commodities, REITs
+symbols = ["SPY", "QQQ", "IWM", "EFA", "EEM", "TLT", "IEF", "GLD", "DBC", "VNQ"]
+benchmark = "SPY"
+
+[strategy]
+# Dual momentum + trend filter + inverse-volatility weights + portfolio vol targeting
+momentum_lookbacks = [63, 126, 252]   # ~3, 6, 12 months of trading days, averaged
+skip_recent = 0                       # days to skip at the end (e.g. 21 for classic 12-1 momentum)
+trend_window = 200                    # hold an asset only if price > its 200-day SMA
+vol_window = 63                       # lookback for volatility / covariance
+top_n = 3                             # hold the N strongest eligible assets
+target_vol = 0.12                     # annualized portfolio volatility target
+max_weight = 0.40                     # per-asset cap; anything not allocated stays in cash
+rebalance = "monthly"                 # "daily" | "weekly" | "monthly"
+
+[execution]
+slippage_bps = 5.0          # assumed cost per fill, in basis points
+commission_per_order = 0.0  # Robinhood is commission-free; regulatory fees are ignored
+fractional = true           # allow fractional shares
+min_trade_weight = 0.01     # skip rebalancing trades smaller than 1% of equity
+min_order_notional = 5.0    # never send orders under $5
+
+[risk]
+starting_cash = 100000.0    # paper account starting balance (and backtest capital)
+max_capital = 1000.0        # LIVE ONLY: the most dollars the bot may manage in your real account
+kill_switch_drawdown = 0.30 # flatten and halt if equity falls 30% from its peak
+max_order_notional = 50000.0
+max_price_deviation = 0.10  # reject a trade if the live quote is >10% from the last daily close
