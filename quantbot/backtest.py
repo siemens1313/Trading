@@ -1,33 +1,55 @@
-"""Daily event-driven backtest.
+"""Daily event-driven backtest of the full desk pipeline.
 
-Timing (no lookahead): signals use closes up to day t. If day t is the last trading day of a
-rebalance period, orders are sized at t's close and filled at the OPEN of day t+1, with slippage.
-The live engine does the same thing: on the first run of a new period it uses completed bars only
-and trades at the current quote.
+Timing (no lookahead): at the close of day T, alpha scores use closes <= T; alpha ICs use only
+returns realized by the open of T (see alphas.py); the risk model uses returns <= T. Orders are filled
+at the OPEN of T+1 with half-spread + slippage + square-root impact. The live engine does the same:
+it uses completed bars, then trades at the current quote.
 """
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 
+from .alphas import Forecast, build_forecast
 from .broker import SimulatedBroker
 from .config import Config
+from .costs import fill_cost_bps
 from .data import align
 from .execution import Order, plan_orders
+from .portfolio import decide, rolling_beta
 from .risk import RiskManager
-from .strategy import compute_targets, required_history
+from .riskmodel import ewma_vol
+from .stats import summarize
 
 
 def period_key(ts: pd.Timestamp, freq: str):
     if freq == "daily":
         return ts.date()
-    if freq == "weekly":
-        iso = ts.isocalendar()
-        return (iso[0], iso[1])
-    return (ts.year, ts.month)
+    iso = ts.isocalendar()
+    return (iso[0], iso[1])
+
+
+@dataclass
+class Panel:
+    O: pd.DataFrame
+    C: pd.DataFrame
+    rets: pd.DataFrame
+    ewma: pd.DataFrame
+    adv: pd.DataFrame   # 20-day average dollar volume
+    beta: pd.DataFrame
+    fc: Forecast
+
+
+def build_panel(bars: dict[str, pd.DataFrame], cfg: Config) -> Panel:
+    O, C, V = align(bars, "open"), align(bars, "close"), align(bars, "volume")
+    idx = O.index.intersection(C.index).intersection(V.index)
+    O, C, V = O.loc[idx], C.loc[idx], V.loc[idx]
+    rets = C.pct_change()
+    fc = build_forecast(C, O, cfg.alphas, cfg.universe.benchmark)
+    beta = rolling_beta(rets, cfg.universe.benchmark, cfg.portfolio.beta_window)
+    return Panel(O, C, rets, ewma_vol(rets, cfg.risk_model.vol_halflife), (C * V).rolling(20).mean(), beta, fc)
 
 
 @dataclass
@@ -36,117 +58,118 @@ class BacktestResult:
     benchmark: pd.Series
     weights: pd.DataFrame
     trades: pd.DataFrame
+    diag: pd.DataFrame          # per-day: gross, net, ex-ante vol, combined IC, turnover, cost
+    alpha_weights: pd.DataFrame
     metrics: dict
     benchmark_metrics: dict
     halted_on: pd.Timestamp | None
+    panel: Panel
 
 
-def metrics(equity: pd.Series, trades: pd.DataFrame | None = None) -> dict:
-    r = equity.pct_change().dropna()
-    years = (equity.index[-1] - equity.index[0]).days / 365.25
-    total = equity.iloc[-1] / equity.iloc[0] - 1
-    cagr = (1 + total) ** (1 / years) - 1 if years > 0 else np.nan
-    vol = r.std() * math.sqrt(252)
-    downside = r[r < 0].std() * math.sqrt(252)
-    dd = equity / equity.cummax() - 1
-    m = {
-        "start": equity.index[0].date(), "end": equity.index[-1].date(),
-        "total_return": total, "cagr": cagr, "ann_vol": vol,
-        "sharpe": (r.mean() * 252) / vol if vol > 0 else np.nan,
-        "sortino": (r.mean() * 252) / downside if downside > 0 else np.nan,
-        "max_drawdown": dd.min(),
-        "calmar": cagr / abs(dd.min()) if dd.min() < 0 else np.nan,
-        "best_day": r.max(), "worst_day": r.min(),
-    }
-    if trades is not None:
-        m["trades"] = int(len(trades))
-        notional = (trades["qty"] * trades["price"]).sum() if len(trades) else 0.0
-        m["turnover_per_year"] = notional / equity.mean() / years if years > 0 else np.nan
-    return m
-
-
-def run_backtest(bars: dict[str, pd.DataFrame], cfg: Config,
-                 start: str | None = None, end: str | None = None) -> BacktestResult:
-    opens, closes = align(bars, "open"), align(bars, "close")
-    idx = closes.index.intersection(opens.index)
-    opens, closes = opens.loc[idx], closes.loc[idx]
-    if end:
-        opens, closes = opens.loc[:end], closes.loc[:end]
-    # Never score the warm-up period where no signal can exist yet.
-    warm = closes.index[min(required_history(cfg.strategy) - 1, len(closes) - 1)]
+def run_backtest(bars: dict[str, pd.DataFrame], cfg: Config, start: str | None = None,
+                 end: str | None = None, panel: Panel | None = None) -> BacktestResult:
+    P = panel or build_panel(bars, cfg)
+    dates = P.C.index if end is None else P.C.loc[:end].index
+    ready = P.fc.alpha_ic.dropna(how="all").index
+    if len(ready) == 0:
+        raise ValueError("alphas never accumulated enough IC history; need more data")
+    warm = max(ready[0], P.ewma.dropna(how="all").index[0], P.beta.dropna(how="all").index[0])
     start_ts = max(pd.Timestamp(start), warm) if start else warm
-
-    p, ex, rk = cfg.strategy, cfg.execution, cfg.risk
-    broker = SimulatedBroker(rk.starting_cash, ex.slippage_bps, ex.commission_per_order, ex.fractional)
+    # include the day before start so the first signal is formed at start's close
+    port, ex, rk, cc = cfg.portfolio, cfg.execution, cfg.risk, cfg.costs
+    broker = SimulatedBroker(rk.starting_cash, 0.0, 0.0, ex.fractional, allow_short=not port.long_only)
     risk = RiskManager(rk)
-    dates = closes.index
     pending: pd.Series | None = None
     peak, halted_on = 0.0, None
-    eq_rows, w_rows, trade_rows = {}, {}, []
+    eq, wts, diag, trades = {}, {}, {}, []
+    last_key = None
 
     for i, t in enumerate(dates):
-        # 1) Execute yesterday's decision at today's open.
+        cost_today, traded_today = 0.0, 0.0
         if pending is not None and halted_on is None:
-            o_px = opens.loc[t].to_dict()
-            equity_open = broker.equity(o_px)
-            for o in plan_orders(pending, broker.positions(), o_px, equity_open, ex):
-                f = broker.submit(o, o_px[o.symbol], ts=str(t.date()))
+            o_px = P.O.loc[t].to_dict()
+            e_open = broker.equity(o_px)
+            prev = dates[i - 1]
+            for o in plan_orders(pending, broker.positions(), o_px, e_open, ex):
+                bps = fill_cost_bps(o.notional, P.adv.at[prev, o.symbol], P.ewma.at[prev, o.symbol], cc)
+                f = broker.submit(o, o_px[o.symbol], ts=str(t.date()), cost_bps=bps)
                 if f.status == "filled":
-                    trade_rows.append({"date": t, "symbol": f.symbol, "side": f.side, "qty": f.qty, "price": f.price})
+                    c = f.qty * o_px[o.symbol] * bps / 1e4
+                    cost_today += c
+                    traded_today += f.qty * o_px[o.symbol]
+                    trades.append({"date": t, "symbol": f.symbol, "side": f.side, "qty": f.qty,
+                                   "price": f.price, "cost_bps": bps, "cost": c})
             pending = None
-
-        # 2) Mark to market at the close; kill switch.
-        c_px = closes.loc[t].to_dict()
         if t < start_ts:
             continue
-        eq = broker.equity(c_px)
-        peak = max(peak, eq)
-        if halted_on is None and risk.kill_switch(eq, peak):
+
+        c_px = P.C.loc[t].to_dict()
+        e = broker.equity(c_px)
+        peak = max(peak, e)
+        if halted_on is None and risk.kill_switch(e, peak):
             for s, q in list(broker.positions().items()):
-                broker.submit(Order(s, "sell", q, c_px[s]), c_px[s], ts=str(t.date()))
-                trade_rows.append({"date": t, "symbol": s, "side": "sell", "qty": q, "price": c_px[s]})
-            eq = broker.equity(c_px)
-            halted_on = t
-        eq_rows[t] = eq
-        w_rows[t] = pd.Series({s: q * c_px[s] / eq for s, q in broker.positions().items()} if eq > 0 else {},
-                              dtype=float).reindex(closes.columns, fill_value=0.0)
+                side = "sell" if q > 0 else "buy"
+                broker.submit(Order(s, side, abs(q), c_px[s]), c_px[s], ts=str(t.date()), cost_bps=cc.linear_bps)
+            e, halted_on = broker.equity(c_px), t
+        w_now = pd.Series({s: q * c_px[s] / e for s, q in broker.positions().items()}, dtype=float)
+        w_now = w_now.reindex(P.C.columns, fill_value=0.0)
+        eq[t], wts[t] = e, w_now
+        row = {"gross": w_now.abs().sum(), "net": w_now.sum(), "turnover": traded_today / e, "cost": cost_today,
+               "combined_ic": float(P.fc.combined_ic.loc[t]), "ex_ante_vol": np.nan}
 
-        # 3) Decide: rebalance after the last close of each period (next date is in a new period).
-        if halted_on is None and i + 1 < len(dates):
-            nxt = dates[i + 1]
-            first = pending is None and not trade_rows and not broker.positions()
-            if first or period_key(nxt, p.rebalance) != period_key(t, p.rebalance):
-                tgt = compute_targets(closes.iloc[: i + 1], p)
-                if tgt is not None:
-                    pending = tgt
+        key = period_key(t, port.rebalance)
+        nxt = dates[i + 1] if i + 1 < len(dates) else None
+        due = port.rebalance == "daily" or (nxt is not None and period_key(nxt, "weekly") != key) or last_key is None
+        if halted_on is None and nxt is not None and due:
+            d = decide(t, P.fc, P.rets, P.ewma, w_now, cfg, P.beta)
+            if d is not None:
+                pending, last_key = d.weights, key
+                row["ex_ante_vol"] = d.ex_ante_vol
+        diag[t] = row
 
-    equity = pd.Series(eq_rows, name="strategy")
-    if equity.empty:
-        raise ValueError("no backtest dates in range (check --start/--end and data length)")
-    bench_px = closes[cfg.universe.benchmark].loc[equity.index]
-    benchmark = (bench_px / bench_px.iloc[0] * rk.starting_cash).rename(cfg.universe.benchmark)
-    trades = pd.DataFrame(trade_rows, columns=["date", "symbol", "side", "qty", "price"])
-    weights = pd.DataFrame(w_rows).T
-    return BacktestResult(equity, benchmark, weights, trades, metrics(equity, trades), metrics(benchmark), halted_on)
+    equity = pd.Series(eq, name="strategy")
+    bench = P.C[cfg.universe.benchmark].loc[equity.index]
+    benchmark = (bench / bench.iloc[0] * rk.starting_cash).rename(cfg.universe.benchmark)
+    tr = pd.DataFrame(trades, columns=["date", "symbol", "side", "qty", "price", "cost_bps", "cost"])
+    weights = pd.DataFrame(wts).T
+    dg = pd.DataFrame(diag).T
+    m = summarize(equity)
+    years = (equity.index[-1] - equity.index[0]).days / 365.25
+    m.update({
+        "trades": len(tr), "turnover_per_year": float(dg["turnover"].sum() / years),
+        "costs_total": float(tr["cost"].sum()), "cost_drag_per_year": float((dg["cost"] / equity.shift(1)).sum() / years),
+        "avg_gross": float(dg["gross"].mean()), "avg_net": float(dg["net"].mean()),
+        "beta": float(np.cov(equity.pct_change().dropna(), benchmark.pct_change().dropna())[0, 1]
+                      / benchmark.pct_change().var()),
+    })
+    return BacktestResult(equity, benchmark, weights, tr, dg, P.fc.alpha_weights.loc[equity.index],
+                          m, summarize(benchmark), halted_on, P)
 
 
 def format_report(res: BacktestResult, bench_name: str) -> str:
+    m, b = res.metrics, res.benchmark_metrics
+    f = lambda x, s: format(x, s)  # noqa: E731
     rows = [
-        ("Period", f"{res.metrics['start']} -> {res.metrics['end']}", ""),
-        ("Total return", f"{res.metrics['total_return']:+.1%}", f"{res.benchmark_metrics['total_return']:+.1%}"),
-        ("CAGR", f"{res.metrics['cagr']:+.2%}", f"{res.benchmark_metrics['cagr']:+.2%}"),
-        ("Ann. volatility", f"{res.metrics['ann_vol']:.2%}", f"{res.benchmark_metrics['ann_vol']:.2%}"),
-        ("Sharpe (rf=0)", f"{res.metrics['sharpe']:.2f}", f"{res.benchmark_metrics['sharpe']:.2f}"),
-        ("Sortino", f"{res.metrics['sortino']:.2f}", f"{res.benchmark_metrics['sortino']:.2f}"),
-        ("Max drawdown", f"{res.metrics['max_drawdown']:.1%}", f"{res.benchmark_metrics['max_drawdown']:.1%}"),
-        ("Calmar", f"{res.metrics['calmar']:.2f}", f"{res.benchmark_metrics['calmar']:.2f}"),
-        ("Trades", f"{res.metrics['trades']}", ""),
-        ("Turnover / year", f"{res.metrics['turnover_per_year']:.1f}x", ""),
-        ("Avg. invested", f"{res.weights.sum(axis=1).mean():.0%}", "100%"),
+        ("Period", f"{m['start']} -> {m['end']}", ""),
+        ("Total return", f(m["total_return"], "+.1%"), f(b["total_return"], "+.1%")),
+        ("CAGR", f(m["cagr"], "+.2%"), f(b["cagr"], "+.2%")),
+        ("Ann. volatility", f(m["ann_vol"], ".2%"), f(b["ann_vol"], ".2%")),
+        ("Sharpe (rf=0)", f(m["sharpe"], ".2f"), f(b["sharpe"], ".2f")),
+        ("  95% CI (block bootstrap)", f"[{m['sharpe_ci'][0]:.2f}, {m['sharpe_ci'][1]:.2f}]",
+         f"[{b['sharpe_ci'][0]:.2f}, {b['sharpe_ci'][1]:.2f}]"),
+        ("  P(Sharpe > 0)", f(m["psr"], ".0%"), f(b["psr"], ".0%")),
+        ("Sortino", f(m["sortino"], ".2f"), f(b["sortino"], ".2f")),
+        ("Max drawdown", f(m["max_drawdown"], ".1%"), f(b["max_drawdown"], ".1%")),
+        ("Calmar", f(m["calmar"], ".2f"), f(b["calmar"], ".2f")),
+        ("Beta to " + bench_name, f(m["beta"], ".2f"), "1.00"),
+        ("Avg gross / net exposure", f"{m['avg_gross']:.0%} / {m['avg_net']:.0%}", "100% / 100%"),
+        ("Turnover / year", f(m["turnover_per_year"], ".1f") + "x", ""),
+        ("Cost drag / year", f(m["cost_drag_per_year"], ".2%"), ""),
+        ("Trades", str(m["trades"]), ""),
     ]
     w = max(len(r[0]) for r in rows)
-    out = [f"{'':<{w}}  {'Strategy':>24}  {bench_name + ' B&H':>12}"]
-    out += [f"{a:<{w}}  {b:>24}  {c:>12}" for a, b, c in rows]
+    out = [f"{'':<{w}}  {'Strategy':>24}  {bench_name + ' B&H':>14}"]
+    out += [f"{a:<{w}}  {x:>24}  {y:>14}" for a, x, y in rows]
     if res.halted_on is not None:
-        out.append(f"\n!! Kill switch triggered on {res.halted_on.date()} — strategy went to cash and stopped.")
+        out.append(f"\n!! Kill switch triggered on {res.halted_on.date()}; book flattened and halted.")
     return "\n".join(out)

@@ -1,5 +1,6 @@
-# quantbot configuration
-# Start in paper mode. Do not switch to live until paper results over several weeks match the backtest.
+# quantbot v2: a desk-style systematic book.
+#   alphas -> evidence-weighted forecast -> shrunk risk model -> cost-aware optimizer -> careful execution
+# Start in paper mode. Only go live after paper results track the backtest for several weeks.
 
 [general]
 mode = "paper"              # "paper" (simulated fills) | "live" (real Robinhood orders, see README)
@@ -9,31 +10,65 @@ state_dir = "state"
 reports_dir = "reports"
 
 [universe]
-# Diversified, liquid ETFs: US large/small cap, intl developed/emerging, bonds, gold, commodities, REITs
-symbols = ["SPY", "QQQ", "IWM", "EFA", "EEM", "TLT", "IEF", "GLD", "DBC", "VNQ"]
+symbols = [
+  # asset classes
+  "SPY", "QQQ", "IWM", "EFA", "EEM", "TLT", "IEF", "GLD", "DBC", "VNQ",
+  # US sectors
+  "XLK", "XLF", "XLE", "XLV", "XLY", "XLP", "XLI", "XLB", "XLU", "XLRE", "XLC",
+]
 benchmark = "SPY"
 
-[strategy]
-# Dual momentum + trend filter + inverse-volatility weights + portfolio vol targeting
-momentum_lookbacks = [63, 126, 252]   # ~3, 6, 12 months of trading days, averaged
-skip_recent = 0                       # days to skip at the end (e.g. 21 for classic 12-1 momentum)
-trend_window = 200                    # hold an asset only if price > its 200-day SMA
-vol_window = 63                       # lookback for volatility / covariance
-top_n = 3                             # hold the N strongest eligible assets
-target_vol = 0.12                     # annualized portfolio volatility target
-max_weight = 0.40                     # per-asset cap; anything not allocated stays in cash
-rebalance = "monthly"                 # "daily" | "weekly" | "monthly"
+[alphas]
+enabled = ["tsmom", "xsmom", "strev", "lowvol"]
+horizon = 5           # forecast horizon (trading days); ICs are measured against open(t+1) -> open(t+1+h)
+ic_window = 504       # rolling window used to estimate each alpha's IC (only realized, past data)
+ic_min_obs = 126      # an alpha gets no weight until it has this many realized IC observations
+prior_weight = 0.3    # shrink evidence-based alpha weights toward equal weights
+ic_haircut = 0.5      # assume live edge is half the measured edge
+
+[alphas.params.tsmom]   # time-series momentum: own 12-1 month return, vol-scaled (absolute, gives market timing)
+lookback = 252
+skip = 21
+[alphas.params.xsmom]   # cross-sectional momentum: 6-month winners vs losers
+lookback = 126
+skip = 5
+[alphas.params.strev]   # short-term reversal: fade the last week's beta-adjusted residual move (stat arb)
+lookback = 5
+beta_window = 60
+[alphas.params.lowvol]  # low-volatility anomaly
+window = 63
+
+[risk_model]
+vol_halflife = 21     # EWMA half-life for volatilities (days)
+corr_window = 126     # window for correlations, Ledoit-Wolf shrunk toward identity
+
+[portfolio]
+long_only = true      # Robinhood live trading requires true; set false to paper-trade a long/short book
+max_weight = 0.20     # per-name cap (|w|)
+max_gross = 1.0       # sum |w|; 1.0 = no leverage
+target_vol = 0.12     # annualized ex-ante volatility cap
+risk_aversion = 10.0  # starting point; with calibrate_risk the optimizer re-solves it to use the vol budget
+calibrate_risk = true # true: size the book to target_vol (risk budget). false: fixed risk aversion (Kelly-style)
+tcost_aversion = 1.0  # cost is amortized over the signal's measured life: kappa = tcost_aversion * (1 - persistence)
+prior_premium = 0.04  # long-only: baseline expected return = beta * 4%/yr (CAPM prior). Ignored for long/short.
+beta_window = 252
+rebalance = "daily"   # "daily" | "weekly"
+
+[costs]
+half_spread_bps = 1.0 # liquid ETFs are typically 0.5-2 bps half-spread
+slippage_bps = 2.0    # extra adverse fill vs. the quote
+impact_coef = 0.1     # square-root impact: coef * daily_vol * sqrt(order $ / ADV $)
 
 [execution]
-slippage_bps = 5.0          # assumed cost per fill, in basis points
-commission_per_order = 0.0  # Robinhood is commission-free; regulatory fees are ignored
-fractional = true           # allow fractional shares
-min_trade_weight = 0.01     # skip rebalancing trades smaller than 1% of equity
-min_order_notional = 5.0    # never send orders under $5
+fractional = true
+min_trade_weight = 0.005  # skip trades below 0.5% of equity (no-trade band)
+min_order_notional = 5.0
+limit_buffer_bps = 10.0   # live: marketable limit = ask*(1+buffer) / bid*(1-buffer)
 
 [risk]
-starting_cash = 100000.0    # paper account starting balance (and backtest capital)
-max_capital = 1000.0        # LIVE ONLY: the most dollars the bot may manage in your real account
-kill_switch_drawdown = 0.30 # flatten and halt if equity falls 30% from its peak
+starting_cash = 100000.0
+max_capital = 1000.0          # LIVE ONLY: hard cap on dollars the bot manages
+kill_switch_drawdown = 0.25   # flatten + halt if equity falls 25% from peak
+daily_loss_limit = 0.03       # stop trading for the day if down 3% from the day's first mark
 max_order_notional = 50000.0
-max_price_deviation = 0.10  # reject a trade if the live quote is >10% from the last daily close
+max_price_deviation = 0.10    # reject trades whose quote is >10% away from the last close

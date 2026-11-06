@@ -15,6 +15,7 @@ class RiskManager:
                      last_closes: dict[str, float]) -> tuple[list[Order], list[tuple[Order, str]]]:
         ok, rejected = [], []
         for o in orders:
+            # prices passed here are mids; ref is the last completed close
             px, ref = prices.get(o.symbol), last_closes.get(o.symbol)
             if px is None or not math.isfinite(px) or px <= 0:
                 rejected.append((o, "invalid quote"))

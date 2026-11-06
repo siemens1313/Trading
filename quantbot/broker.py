@@ -38,7 +38,13 @@ class Broker(ABC):
     def available_cash(self, prices: dict[str, float]) -> float: ...
 
     @abstractmethod
-    def submit(self, order: Order, price: float, ts: str | None = None) -> Fill: ...
+    def submit(self, order: Order, price: float, ts: str | None = None, *, cost_bps: float | None = None,
+               limit_price: float | None = None) -> Fill:
+        """price: the price we expect to trade at (quote side for live/paper, open for backtests).
+        cost_bps: extra adverse cost applied by simulators. limit_price: used by real brokers."""
+
+    def cancel_stale(self) -> list[str]:
+        return []
 
 
 def _now() -> str:
@@ -47,16 +53,17 @@ def _now() -> str:
 
 class SimulatedBroker(Broker):
     def __init__(self, cash: float, slippage_bps: float = 5.0, commission: float = 0.0,
-                 fractional: bool = True, positions: dict[str, float] | None = None):
+                 fractional: bool = True, positions: dict[str, float] | None = None, allow_short: bool = False):
         self.cash = float(cash)
         self.pos: dict[str, float] = dict(positions or {})
-        self.slip = slippage_bps / 1e4
+        self.slip_bps = slippage_bps
         self.commission = commission
         self.fractional = fractional
+        self.allow_short = allow_short
         self.fills: list[Fill] = []
 
     def positions(self):
-        return {s: q for s, q in self.pos.items() if q > 0}
+        return {s: q for s, q in self.pos.items() if abs(q) > 1e-9}
 
     def available_cash(self, prices=None):
         return self.cash
@@ -67,12 +74,13 @@ class SimulatedBroker(Broker):
     def _q(self, q: float) -> float:
         return math.floor(q * 1e6) / 1e6 if self.fractional else float(math.floor(q))
 
-    def submit(self, order, price, ts=None):
+    def submit(self, order, price, ts=None, *, cost_bps=None, limit_price=None):
         ts = ts or _now()
+        slip = (self.slip_bps if cost_bps is None else cost_bps) / 1e4
         if not (math.isfinite(price) and price > 0):
             return self._record(Fill(ts, order.symbol, order.side, 0, price, 0, "rejected", "bad price"))
         if order.side == "buy":
-            px = price * (1 + self.slip)
+            px = price * (1 + slip)
             qty = order.qty
             if qty * px + self.commission > self.cash:  # scale down to available cash
                 qty = self._q(max(self.cash - self.commission, 0) / px)
@@ -81,14 +89,14 @@ class SimulatedBroker(Broker):
             self.cash -= qty * px + self.commission
             self.pos[order.symbol] = self.pos.get(order.symbol, 0.0) + qty
         else:
-            px = price * (1 - self.slip)
+            px = price * (1 - slip)
             held = self.pos.get(order.symbol, 0.0)
-            qty = min(order.qty, held)  # never short
+            qty = order.qty if self.allow_short else min(order.qty, max(held, 0.0))
             if qty <= 0:
                 return self._record(Fill(ts, order.symbol, "sell", 0, px, 0, "rejected", "no position"))
             self.cash += qty * px - self.commission
             left = held - qty
-            self.pos[order.symbol] = 0.0 if left < 1e-9 else left
+            self.pos[order.symbol] = 0.0 if abs(left) < 1e-9 else left
         if abs(self.cash) < 1e-9:
             self.cash = 0.0
         return self._record(Fill(ts, order.symbol, order.side, qty, px, self.commission, "filled"))
@@ -102,18 +110,18 @@ class PaperBroker(SimulatedBroker):
     """Simulated account that survives restarts. Fills at the live quote +/- slippage."""
 
     def __init__(self, state_dir: str | Path, starting_cash: float, slippage_bps: float,
-                 commission: float, fractional: bool):
+                 commission: float, fractional: bool, allow_short: bool = False):
         self.dir = Path(state_dir)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.state_path = self.dir / "paper_account.json"
         self.trades_path = self.dir / "paper_trades.csv"
         if self.state_path.exists():
             st = json.loads(self.state_path.read_text())
-            super().__init__(st["cash"], slippage_bps, commission, fractional, st.get("positions", {}))
+            super().__init__(st["cash"], slippage_bps, commission, fractional, st.get("positions", {}), allow_short)
             self.starting_cash = st.get("starting_cash", starting_cash)
             self.created_at = st.get("created_at", _now())
         else:
-            super().__init__(starting_cash, slippage_bps, commission, fractional)
+            super().__init__(starting_cash, slippage_bps, commission, fractional, allow_short=allow_short)
             self.starting_cash = starting_cash
             self.created_at = _now()
             self.save()
@@ -125,8 +133,8 @@ class PaperBroker(SimulatedBroker):
         tmp.write_text(json.dumps(st, indent=2))
         tmp.replace(self.state_path)
 
-    def submit(self, order, price, ts=None):
-        f = super().submit(order, price, ts)
+    def submit(self, order, price, ts=None, *, cost_bps=None, limit_price=None):
+        f = super().submit(order, price, ts, cost_bps=cost_bps)
         new = not self.trades_path.exists()
         with open(self.trades_path, "a", newline="") as fh:
             w = csv.DictWriter(fh, fieldnames=list(asdict(f)))
@@ -161,13 +169,23 @@ def robinhood_login():
 
 class RobinhoodBroker(Broker):
     """Real-money broker. Only touches symbols in the bot's universe and never manages more than
-    `max_capital` dollars, regardless of what else is in the account."""
+    `max_capital` dollars, whatever else is in the account. Sends marketable LIMIT orders (never naked
+    market orders), remembers their ids, and cancels its own unfilled orders on the next cycle.
+    Untested against a live account: watch the first runs closely."""
 
-    def __init__(self, universe: list[str], max_capital: float, fractional: bool):
+    def __init__(self, universe: list[str], max_capital: float, fractional: bool, state_dir: str | Path):
         self.rh = robinhood_login()
         self.universe = set(universe)
         self.max_capital = max_capital
         self.fractional = fractional
+        self.orders_path = Path(state_dir) / "live_orders.json"
+        self.orders_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _ids(self) -> list[str]:
+        return json.loads(self.orders_path.read_text()) if self.orders_path.exists() else []
+
+    def _save_ids(self, ids: list[str]) -> None:
+        self.orders_path.write_text(json.dumps(ids[-500:]))
 
     def positions(self):
         holdings = self.rh.account.build_holdings()
@@ -178,15 +196,24 @@ class RobinhoodBroker(Broker):
         invested = sum(q * prices[s] for s, q in self.positions().items())
         return max(0.0, min(bp, self.max_capital - invested))
 
-    def submit(self, order, price, ts=None):
+    def cancel_stale(self):
+        cancelled, keep = [], []
+        for oid in self._ids():
+            info = self.rh.orders.get_stock_order_info(oid) or {}
+            if info.get("state") in ("queued", "unconfirmed", "confirmed", "partially_filled"):
+                self.rh.orders.cancel_stock_order(oid)
+                cancelled.append(oid)
+        self._save_ids(keep)
+        return cancelled
+
+    def submit(self, order, price, ts=None, *, cost_bps=None, limit_price=None):
         ts = ts or _now()
-        o = self.rh.orders
-        if self.fractional:
-            fn = o.order_buy_fractional_by_quantity if order.side == "buy" else o.order_sell_fractional_by_quantity
-            resp = fn(order.symbol, round(order.qty, 6), timeInForce="gfd")
-        else:
-            fn = o.order_buy_market if order.side == "buy" else o.order_sell_market
-            resp = fn(order.symbol, int(order.qty), timeInForce="gfd")
+        if limit_price is None:
+            return Fill(ts, order.symbol, order.side, 0, price, 0, "rejected", "live orders require a limit price")
+        qty = round(order.qty, 6) if self.fractional else int(order.qty)
+        resp = self.rh.orders.order(order.symbol, qty, order.side, limitPrice=round(limit_price, 2), timeInForce="gfd")
         ok = isinstance(resp, dict) and resp.get("id")
+        if ok:
+            self._save_ids(self._ids() + [resp["id"]])
         note = resp.get("id") if ok else str(resp)[:200]
-        return Fill(ts, order.symbol, order.side, order.qty, price, 0.0, "submitted" if ok else "rejected", note)
+        return Fill(ts, order.symbol, order.side, qty, limit_price, 0.0, "submitted" if ok else "rejected", note)

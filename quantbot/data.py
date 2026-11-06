@@ -2,11 +2,23 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
 
 COLS = ["open", "high", "low", "close", "volume"]
+
+
+@dataclass
+class Quote:
+    bid: float
+    ask: float
+    last: float
+
+    @property
+    def mid(self) -> float:
+        return 0.5 * (self.bid + self.ask)
 
 
 class DataProvider(ABC):
@@ -18,6 +30,11 @@ class DataProvider(ABC):
         """Most recent tradable price. Default: last daily close."""
         h = self.history(symbols)
         return {s: float(df["close"].iloc[-1]) for s, df in h.items()}
+
+    def quotes(self, symbols: list[str], half_spread_bps: float) -> dict[str, Quote]:
+        """Bid/ask. Providers without a live book get a modeled spread around the last price."""
+        k = half_spread_bps / 1e4
+        return {s: Quote(p * (1 - k), p * (1 + k), p) for s, p in self.latest_prices(symbols).items()}
 
 
 def _clean(df: pd.DataFrame) -> pd.DataFrame:
@@ -103,6 +120,19 @@ class RobinhoodProvider(DataProvider):
     def latest_prices(self, symbols):
         px = self.rs.stocks.get_latest_price(symbols, includeExtendedHours=False)
         return {s: float(p) for s, p in zip(symbols, px)}
+
+    def quotes(self, symbols, half_spread_bps):
+        out = {}
+        for q in self.rs.stocks.get_quotes(symbols):
+            if not q:
+                continue
+            last = float(q["last_trade_price"])
+            bid, ask = float(q.get("bid_price") or 0), float(q.get("ask_price") or 0)
+            if not (0 < bid <= ask) or ask / bid - 1 > 0.01:  # missing or absurd book -> model it
+                k = half_spread_bps / 1e4
+                bid, ask = last * (1 - k), last * (1 + k)
+            out[q["symbol"]] = Quote(bid, ask, last)
+        return out
 
 
 def make_provider(cfg) -> DataProvider:

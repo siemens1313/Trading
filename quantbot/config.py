@@ -21,31 +21,61 @@ class UniverseCfg:
 
 
 @dataclass
-class StrategyCfg:
-    momentum_lookbacks: list[int] = field(default_factory=lambda: [63, 126, 252])
-    skip_recent: int = 0
-    trend_window: int = 200
-    vol_window: int = 63
-    top_n: int = 3
+class AlphaCfg:
+    enabled: list[str] = field(default_factory=lambda: ["tsmom", "xsmom", "strev", "lowvol"])
+    horizon: int = 5
+    ic_window: int = 252
+    ic_min_obs: int = 126
+    prior_weight: float = 0.3
+    ic_haircut: float = 0.5
+    params: dict = field(default_factory=dict)
+
+
+@dataclass
+class RiskModelCfg:
+    vol_halflife: int = 21
+    corr_window: int = 126
+
+
+@dataclass
+class PortfolioCfg:
+    long_only: bool = True
+    max_weight: float = 0.20
+    max_gross: float = 1.0
     target_vol: float = 0.12
-    max_weight: float = 0.40
-    rebalance: str = "monthly"
+    risk_aversion: float = 10.0
+    calibrate_risk: bool = True
+    tcost_aversion: float = 1.0
+    prior_premium: float = 0.04
+    beta_window: int = 252
+    rebalance: str = "daily"
+
+
+@dataclass
+class CostCfg:
+    half_spread_bps: float = 1.0
+    slippage_bps: float = 2.0
+    impact_coef: float = 0.1
+
+    @property
+    def linear_bps(self) -> float:
+        return self.half_spread_bps + self.slippage_bps
 
 
 @dataclass
 class ExecutionCfg:
-    slippage_bps: float = 5.0
-    commission_per_order: float = 0.0
     fractional: bool = True
-    min_trade_weight: float = 0.01
+    min_trade_weight: float = 0.005
     min_order_notional: float = 5.0
+    limit_buffer_bps: float = 10.0
 
 
 @dataclass
 class RiskCfg:
     starting_cash: float = 100_000.0
     max_capital: float = 1_000.0
-    kill_switch_drawdown: float = 0.30
+    kill_switch_drawdown: float = 0.25
+    daily_loss_limit: float = 0.03
     max_order_notional: float = 50_000.0
     max_price_deviation: float = 0.10
 
@@ -54,7 +84,10 @@ class RiskCfg:
 class Config:
     general: GeneralCfg = field(default_factory=GeneralCfg)
     universe: UniverseCfg = field(default_factory=UniverseCfg)
-    strategy: StrategyCfg = field(default_factory=StrategyCfg)
+    alphas: AlphaCfg = field(default_factory=AlphaCfg)
+    risk_model: RiskModelCfg = field(default_factory=RiskModelCfg)
+    portfolio: PortfolioCfg = field(default_factory=PortfolioCfg)
+    costs: CostCfg = field(default_factory=CostCfg)
     execution: ExecutionCfg = field(default_factory=ExecutionCfg)
     risk: RiskCfg = field(default_factory=RiskCfg)
     root: Path = Path(".")
@@ -64,20 +97,21 @@ class Config:
         return p if p.is_absolute() else self.root / p
 
     def validate(self) -> None:
-        s, g = self.strategy, self.general
+        from .alphas import ALPHAS
+        g, p, a = self.general, self.portfolio, self.alphas
         if g.mode not in ("paper", "live"):
             raise ValueError(f"general.mode must be 'paper' or 'live', got {g.mode!r}")
         if g.data_provider not in ("csv", "yahoo", "robinhood"):
             raise ValueError(f"unknown data_provider {g.data_provider!r}")
-        if s.rebalance not in ("daily", "weekly", "monthly"):
-            raise ValueError(f"strategy.rebalance must be daily/weekly/monthly, got {s.rebalance!r}")
-        if not (0 < s.max_weight <= 1):
-            raise ValueError("strategy.max_weight must be in (0, 1]")
-        if s.top_n < 1 or not s.momentum_lookbacks:
-            raise ValueError("strategy.top_n must be >= 1 and momentum_lookbacks non-empty")
-        if s.top_n * s.max_weight < 1 - 1e-9:
-            # Not an error, but worth knowing: the portfolio can never be fully invested.
-            pass
+        if p.rebalance not in ("daily", "weekly"):
+            raise ValueError("portfolio.rebalance must be 'daily' or 'weekly'")
+        if g.mode == "live" and not p.long_only:
+            raise ValueError("live trading on Robinhood requires portfolio.long_only = true")
+        if not 0 < p.max_weight <= 1 or p.max_gross <= 0 or p.risk_aversion <= 0:
+            raise ValueError("portfolio: need 0 < max_weight <= 1, max_gross > 0, risk_aversion > 0")
+        bad = [k for k in a.enabled if k not in ALPHAS]
+        if bad or not a.enabled:
+            raise ValueError(f"alphas.enabled has unknown/empty entries {bad}; known: {sorted(ALPHAS)}")
         if self.universe.benchmark not in self.universe.symbols:
             raise ValueError("universe.benchmark must be one of universe.symbols")
 
@@ -94,13 +128,11 @@ def load_config(path: str | Path = "config.toml") -> Config:
     path = Path(path)
     with open(path, "rb") as f:
         raw = tomllib.load(f)
-    cfg = Config(
-        general=_build(GeneralCfg, raw.get("general", {})),
-        universe=_build(UniverseCfg, raw.get("universe", {})),
-        strategy=_build(StrategyCfg, raw.get("strategy", {})),
-        execution=_build(ExecutionCfg, raw.get("execution", {})),
-        risk=_build(RiskCfg, raw.get("risk", {})),
-        root=path.resolve().parent,
-    )
+    sections = {"general": GeneralCfg, "universe": UniverseCfg, "alphas": AlphaCfg, "risk_model": RiskModelCfg,
+                "portfolio": PortfolioCfg, "costs": CostCfg, "execution": ExecutionCfg, "risk": RiskCfg}
+    unknown = set(raw) - set(sections)
+    if unknown:
+        raise ValueError(f"unknown config sections: {sorted(unknown)}")
+    cfg = Config(**{k: _build(cls, raw.get(k, {})) for k, cls in sections.items()}, root=path.resolve().parent)
     cfg.validate()
     return cfg

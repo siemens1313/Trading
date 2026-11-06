@@ -1,6 +1,8 @@
 pandas>=2.0
 numpy>=1.24
-# Optional, for live market data / Robinhood connectivity on your machine:
-# yfinance>=0.2      # free daily data (data_provider = "yahoo")
-# robin_stocks>=3.0  # unofficial Robinhood API (data_provider = "robinhood", mode = "live")
 pytest>=7
+# Optional:
+# scipy>=1.10        # only for the optimizer cross-check test
+# yfinance>=0.2      # data_provider = "yahoo" (free daily data, modeled spread)
+# robin_stocks>=3.0  # data_provider = "robinhood" (real bid/ask) and mode = "live"
+# pyotp>=2.8         # Robinhood MFA via RH_TOTP_SECRET

@@ -1,105 +1,115 @@
-# quantbot
+# quantbot v2: a desk-style systematic trading bot
 
-A small, tested quantitative trading bot. **Paper trading first**, with an optional and locked-by-default Robinhood live adapter.
+Paper trading first, with an optional and locked-by-default Robinhood live adapter.
 
-> Robinhood has no paper-trading account and no official stock-trading API. So paper mode here runs a
-> **local simulated account** (`state/paper_account.json`) that fills at real market prices plus slippage.
-> Live mode uses the unofficial [`robin_stocks`](https://github.com/jmfernandes/robin_stocks) library.
-> Automated trading through it is not supported by Robinhood and may break or get your account restricted. Use small sizes.
+## What "trade like Jane Street" can and can't mean here
 
-## Strategy: dual momentum + trend + volatility targeting
+Jane Street's core edge is **market making**: quoting both sides with low-latency infrastructure,
+pricing ETFs and options better than everyone else, and buying retail order flow, including from Robinhood.
+A Robinhood bot can't do any of that. It has no direct market access, no co-location and no exchange rebates,
+and its orders are filled by those same market makers.
 
-Universe: 10 liquid ETFs (`SPY QQQ IWM EFA EEM TLT IEF GLD DBC VNQ`). Once a month:
+What we can copy is how a professional quant desk works:
 
-1. **Momentum score** = average of 3, 6 and 12-month total return.
-2. **Eligible** only if momentum > 0 *and* price > 200-day moving average.
-3. Hold the **top 3** eligible ETFs, weighted by **inverse volatility**.
-4. Scale the book so estimated portfolio volatility is ≤ **12%/yr**. No asset is above 40%. The rest stays in **cash**.
-   When nothing qualifies, the bot is 100% cash.
+| Desk discipline | Implemented as |
+|---|---|
+| Many small, independent edges | `alphas.py`: time-series momentum, cross-sectional momentum, short-term residual reversal (stat arb), low-vol |
+| Trust only measured edge | Each alpha's weight comes from its *realized* information coefficient (IC), lagged until the forward return is actually known. A signal with negative IC gets zero weight, and the bot never flips it to make it look good |
+| Haircut your backtest | Forecast size = Grinold `IC × σ × score`, with the IC cut in half (`ic_haircut`) |
+| Separate alpha from beta | The alpha is relative value (demeaned). Long-only books add a CAPM prior: beta × 4%/yr |
+| Don't let noise drive sizing | Ledoit-Wolf-shrunk correlations × EWMA vols (`riskmodel.py`) |
+| Trade only when edge beats cost | Cost-aware mean-variance optimizer (`optimizer.py`, FISTA, no dependencies). An L1 cost term creates a no-trade band, and cost is amortized over the signal's *measured* persistence |
+| Live within a risk budget | Risk aversion is calibrated to a 12% volatility target, with gross and per-name caps |
+| Realistic fills | Half-spread + slippage + square-root market impact (`costs.py`). Paper fills cross the actual bid/ask. Live sends marketable **limit** orders and cancels its own stale ones |
+| Hard risk limits | Kill switch (−25% from peak), 3% daily loss limit, bad-quote filter, per-order notional cap, `max_capital` cap for live |
+| Post-trade review | `state/journal.jsonl` logs every decision: forecasts, alpha weights, ICs, targets, orders, fills |
+| Be honest about luck | Block-bootstrap Sharpe confidence interval, probabilistic and **deflated** Sharpe, in-sample/out-of-sample protocol, and a check of whether the alpha overlay adds value net of costs |
 
-All parameters are in `config.toml`.
-
-## Backtest (real Robinhood daily data, 2020-01-02 → 2026-11-05)
+## Results (real Robinhood daily data, 21 ETFs, 2019-08 → 2026-11)
 
 | | Strategy | SPY buy & hold |
 |---|---:|---:|
-| CAGR | +9.1% | +12.6% |
-| Volatility | 12.8% | 20.1% |
-| Sharpe (rf=0) | 0.74 | 0.69 |
-| Max drawdown | **−16.4%** | −34.1% |
-| Calmar | 0.55 | 0.37 |
+| CAGR | +8.2% | +14.0% |
+| Volatility | 12.0% | 19.7% |
+| Sharpe (95% CI) | 0.72 (0.01 – 1.54) | 0.77 (0.08 – 1.56) |
+| Max drawdown | −23.4% | −34.1% |
+| Beta to SPY | 0.51 | 1.00 |
+| Turnover / cost drag | 24x/yr, 0.74%/yr | — |
 
-What this means: the strategy gives up return in strong bull markets and roughly halves the drawdown. 2020–2022: strategy 6.5% CAGR
-vs SPY 5.6% (−16% vs −34% max DD). 2023–2026: strategy 11.0% vs SPY 18.6%. Across top_n ∈ {2,3,4} × target_vol ∈ {10,12,15%}
-× monthly/weekly, Sharpe ranged 0.50–0.92 and max DD never exceeded −18.5%. Monthly beat weekly every time.
+- **Out of sample:** settings were chosen on 2019–2022 only (12 variants). The chosen setup made Sharpe 0.33 in-sample and **1.09 out-of-sample (2023–2026)**. Every variant landed at 0.98–1.10 out-of-sample, so the result isn't sensitive to settings.
+- **Deflated Sharpe:** 89% probability the edge is real after counting about 15 tried configurations.
+- **The uncomfortable part, which `python -m quantbot research` prints for you:** the risk-managed beta book *alone* (alpha forecasts zeroed) also makes Sharpe 0.72 at 7.8x turnover and −19% max drawdown. The alpha overlay adds **+0.04%/yr, t-stat 0.03: no proven net value**.
+  Time-series momentum does have real predictive power (5-day IC +0.05, t = 2.6). But across 21 highly correlated ETFs, long-only and after costs, it doesn't turn into profit.
+  A desk wouldn't trade an overlay that can't prove itself, so:
+  - paper-trade it to gather live evidence;
+  - for live money, set `alphas.ic_haircut = 0` (beta book only) unless `research` shows the overlay's t-stat above about 2.
+- **Dividends are missing:** the bundled data is split-adjusted, not dividend-adjusted, which understates bonds and REITs. Taxes are ignored. Not financial advice.
 
-Caveats: the bundled CSVs are split-adjusted but **not dividend-adjusted** (understates both, bonds most). The backtest
-models 5 bps slippage and no taxes. Past performance is not predictive; this is not financial advice.
-
-## Quick start
+## Commands
 
 ```bash
 pip install -r requirements.txt
-python -m pytest -q                     # 17 tests: no-lookahead, accounting, risk, engine
-python -m quantbot backtest             # writes reports/backtest_*.csv
+python -m pytest -q                           # 30 tests (incl. no-lookahead, optimizer vs scipy, planted-alpha combiner test)
+python -m quantbot research                   # per-alpha IC/decay/persistence, deflated Sharpe, overlay attribution
+python -m quantbot backtest --report          # metrics + reports/tearsheet.html
 python -m quantbot backtest --start 2023-01-01
-python -m quantbot run --dry-run -v     # show signals + orders, change nothing
-python -m quantbot run                  # one paper trading cycle
-python -m quantbot status               # account, positions, P&L, signals
+python -m quantbot run --dry-run -v           # full forecast table and orders, nothing sent
+python -m quantbot run                        # one paper cycle (rebalances at most once per day)
+python -m quantbot status                     # P&L, exposures, beta, alpha ICs/weights, per-symbol book
 ```
 
-### Paper trading with live prices
-
-`data_provider = "csv"` replays the bundled data (useful offline). For real paper trading, switch to live quotes:
+### Paper trading with live data
 
 ```bash
-pip install yfinance
-python -m quantbot update-data --source yahoo
+pip install yfinance && python -m quantbot update-data --source yahoo
 ```
-then set `data_provider = "yahoo"` in `config.toml` (or `"robinhood"`, see below), and schedule it:
-
+Set `data_provider = "yahoo"`, or `"robinhood"` for real bid/ask, then run once each weekday morning:
 ```bash
-# crontab -e   (10:00 ET on weekdays; the bot only rebalances on the first run of each month)
-0 10 * * 1-5 cd /path/to/quantbot && python -m quantbot run >> state/cron.log 2>&1
+# crontab -e   (09:45 ET Mon-Fri)
+45 9 * * 1-5 cd /path/to/quantbot && python -m quantbot run >> state/cron.log 2>&1
 ```
-or keep it running: `python -m quantbot loop --every 30`.
+Compare `state/paper_equity.csv` and `state/journal.jsonl` with the backtest for several weeks before thinking about live.
 
-Run it for at least a few weeks to a couple of months. Then compare `state/paper_equity.csv` against the backtest before you think about live.
+### Long/short (paper only)
 
-## Going live on Robinhood (only after paper trading)
+Set `portfolio.long_only = false` to paper-trade a market-neutral stat-arb book: no beta prior, shorts allowed.
+Robinhood's API doesn't support shorting through this bot, so live mode refuses long/short configs.
+
+## Going live on Robinhood (after paper trading)
 
 1. `pip install robin_stocks pyotp`
-2. Set credentials as environment variables (never in the config):
-   `RH_USERNAME`, `RH_PASSWORD`, and `RH_TOTP_SECRET` (authenticator secret) or `RH_MFA_CODE`.
-3. In `config.toml`: `mode = "live"`, `data_provider = "robinhood"`, and set `risk.max_capital` to a small amount (default **$1,000**).
-4. Unlock: `export QUANTBOT_ALLOW_LIVE=yes`
-5. `python -m quantbot run --dry-run -v`, then `python -m quantbot run`. You type `send` to confirm each batch of orders (`--yes` skips this for cron).
+2. Set env vars `RH_USERNAME`, `RH_PASSWORD`, and `RH_TOTP_SECRET` (or `RH_MFA_CODE`). Never put them in the config.
+3. In `config.toml`: `mode = "live"`, `data_provider = "robinhood"`, and a small `risk.max_capital` (default $1,000).
+4. `export QUANTBOT_ALLOW_LIVE=yes`, then `python -m quantbot run --dry-run -v`, then `python -m quantbot run`. You type `send` to confirm.
 
-The live broker only trades symbols in the universe and never manages more than `max_capital`. Your other holdings are left alone.
-Orders are market orders (fractional by quantity, good-for-day) during regular hours. **The live adapter has not been tested against a real account.**
-Watch the first runs in the Robinhood app.
+The live broker only trades universe symbols, never manages more than `max_capital`, sends marketable limit orders
+(good for day), and only cancels orders it placed itself. It uses the unofficial `robin_stocks` library. Robinhood doesn't
+support automated trading through it, and it may break or get an account restricted. **The live adapter has not been tested
+against a real account.** Watch the first runs in the Robinhood app.
 
-## Safety rails
+## Adding your own alpha
 
-- **Kill switch**: equity down 30% from peak → flatten everything and halt. `python -m quantbot resume` to clear it.
-- Rejects orders whose quote is >10% from the last close (bad data) or above `max_order_notional`.
-- Never shorts, never uses leverage, never spends cash it doesn't have.
-- Signals use completed daily bars only (a test shocks future prices and checks that the past doesn't change).
-- Idempotent: running every 15 minutes still rebalances once per period.
+Write `def myalpha(C: DataFrame, bench: str, **params) -> DataFrame` (scores per date and symbol, using data up to each date only),
+register it in `ALPHAS` in `quantbot/alphas.py`, add it to `alphas.enabled`, and run `research`. The combiner will weight it by its
+realized IC automatically. The tests show the pattern: a planted predictive alpha gets weighted and a planted anti-predictive one gets zero.
 
 ## Layout
 
 ```
-config.toml            all parameters
-data/*.csv             daily bars (from Robinhood market data)
-quantbot/strategy.py   signal -> target weights
-quantbot/execution.py  target weights -> orders (shared by backtest and live)
-quantbot/broker.py     SimulatedBroker, PaperBroker, RobinhoodBroker
-quantbot/risk.py       pre-trade checks, kill switch
-quantbot/backtest.py   event-driven backtest + metrics
-quantbot/engine.py     one paper/live cycle with persistent state
-quantbot/cli.py        command line
-tests/                 pytest suite
+config.toml               all parameters, commented
+data/*.csv                21 ETFs, daily bars from Robinhood market data
+quantbot/alphas.py        signals, realized-IC measurement, evidence-weighted combination
+quantbot/riskmodel.py     EWMA vol x Ledoit-Wolf correlation
+quantbot/optimizer.py     cost-aware mean-variance (FISTA), risk-budget calibration
+quantbot/portfolio.py     forecast + prior + risk model + optimizer -> target weights
+quantbot/costs.py         spread + slippage + sqrt impact
+quantbot/execution.py     weights -> orders (shared by backtest and live)
+quantbot/broker.py        SimulatedBroker, PaperBroker, RobinhoodBroker (limit orders)
+quantbot/risk.py          pre-trade checks, kill switch
+quantbot/backtest.py      event-driven backtest
+quantbot/stats.py         bootstrap CI, probabilistic/deflated Sharpe
+quantbot/research.py      alpha diagnostics, overlay attribution
+quantbot/report.py        HTML tearsheet
+quantbot/engine.py        one paper/live cycle, state, journal
+quantbot/cli.py           command line
 ```
-
-To try your own idea, write a function with the same signature as `compute_targets(closes, cfg) -> weights` and backtest it.
