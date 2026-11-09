@@ -179,13 +179,21 @@ class CliTests(unittest.TestCase):
             "<rss><channel><item><title>AAA beats estimates</title><pubDate>Mon, 05 Jan 2026 15:00:00 GMT</pubDate></item></channel></rss>"
         )
         out_file = self.dir / "inputs" / "headlines.csv"
-        args = ("headlines", "--feed", feeds.as_uri() + "/{symbol}.xml", "--symbols", "AAA", "--out", str(out_file))
+        args = ("headlines", "--feed", feeds.as_uri() + "/{symbol}.xml", "--symbols", "AAA", "--out", str(out_file), "--pause", "0")
         code, out, _ = run(*args)
         self.assertEqual(code, 0, out)
         self.assertIn("1 new", out)
         code, out, _ = run(*args)
         self.assertIn("0 new", out)
         self.assertEqual(out_file.read_text().splitlines()[1], "2026-01-05,AAA,AAA beats estimates")
+        (feeds / "BAD.xml").write_text("<rss><channel><item>")  # truncated XML
+        code, out, _ = run("headlines", "--feed", feeds.as_uri() + "/{symbol}.xml", "--symbols", "BAD,AAA,NONE", "--out", str(out_file), "--pause", "0")
+        self.assertEqual(code, 0, out)  # one feed still answered
+        self.assertIn("BAD: feed failed", out)
+        self.assertIn("NONE: feed failed", out)
+        code, _, err = run("headlines", "--feed", feeds.as_uri() + "/{symbol}.xml", "--symbols", "NONE", "--out", str(out_file))
+        self.assertEqual(code, 2)
+        self.assertIn("every feed failed", err)
 
 
 if __name__ == "__main__":

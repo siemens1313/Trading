@@ -202,17 +202,21 @@ default (a value is read as JSON when it parses), e.g. `--param 'pairs.pairs=[["
 
 ### Weekday paper trading
 
-A Claude scheduled task (set up in the owner's account, outside this repo) runs the daily bot at
+A Claude scheduled task, set up in the owner's account outside this repo, runs the daily bot at
 8:13 pm New York time on weekdays. By then the UTC day has rolled over, which the Robinhood connector
-needs before it returns the day's bar. The task:
+needs before it returns the day's bar. Each run starts a fresh session in the owner's "Trading" cloud
+environment, the one that can reach news.google.com, and:
 
 1. fetches daily bars since 2019 for the 20 symbols with the connector's `get_equity_historicals`, its
    only Robinhood call;
 2. ingests them;
-3. runs `python -m strategy_bots paper --since 2026-11-06`;
-4. reports the table.
+3. collects Google News headlines for the same symbols (`headlines --feed ...`);
+4. rebuilds the ten accounts with `python -m strategy_bots paper --since 2026-11-06`;
+5. reports the table.
 
-It never places, changes or cancels an order.
+It never places, changes or cancels an order. Nothing carries over between runs: the nine price-driven
+accounts come out exactly the same each time, but the sentiment account only sees the headlines Google
+News still lists, roughly the last week or two.
 
 ### The daily bot
 

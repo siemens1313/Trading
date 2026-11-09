@@ -10,7 +10,9 @@ import argparse
 import json
 import math
 import sys
+import time
 import urllib.request
+import xml.etree.ElementTree as ET
 from datetime import date
 from pathlib import Path
 
@@ -72,6 +74,7 @@ def _parser() -> argparse.ArgumentParser:
     news.add_argument("--feed", required=True, help="feed URL with {symbol} where the ticker goes")
     news.add_argument("--symbols", type=_symbols, required=True, help="comma-separated tickers")
     news.add_argument("--out", type=Path, default=Path("inputs/headlines.csv"), help="(default: inputs/headlines.csv)")
+    news.add_argument("--pause", type=float, default=1.0, help="seconds between feed requests (default: 1)")
     news.set_defaults(func=_headlines)
 
     ex = sub.add_parser("execute", help="simulate TWAP, VWAP and implementation-shortfall execution on intraday bars")
@@ -342,13 +345,25 @@ def _print_account(s: DailyStrategy, path: Path, account: PaperAccount, fills: l
 
 
 def _headlines(args) -> int:
-    for symbol in args.symbols:
+    """One feed per symbol; a feed that fails is reported and skipped. Fails only if every feed does."""
+    failed = []
+    for k, symbol in enumerate(args.symbols):
+        if k and args.pause > 0:
+            time.sleep(args.pause)
         url = args.feed.replace("{symbol}", symbol)
         request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-        with urllib.request.urlopen(request, timeout=20) as response:
-            items = text.parse_feed(response.read())
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                items = text.parse_feed(response.read())
+        except (OSError, ET.ParseError) as exc:  # URLError and HTTPError are OSErrors
+            failed.append(symbol)
+            print(f"{symbol}: feed failed ({exc})")
+            continue
         added = text.append_headlines(args.out, symbol, items)
         print(f"{symbol}: {len(items)} headlines in the feed, {added} new, saved to {args.out}")
+    if failed and len(failed) == len(args.symbols):
+        print("error: every feed failed", file=sys.stderr)
+        return 2
     return 0
 
 
