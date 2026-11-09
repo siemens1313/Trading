@@ -159,8 +159,133 @@ Unknown keys are rejected, so a typo can't silently fall back to a default.
   actually watch.
 - In the article's words: a checklist, not a crystal ball — "期权不是水晶球". Not investment advice.
 
-### Tests
+## Strategy bots
+
+Two bots that run fifteen common strategies on US stocks. `python -m strategy_bots list` shows them
+all. Neither places a real order: the daily bot keeps a paper account in a JSON file, and the intraday
+bot is a simulator.
+
+| Bot | Strategies (numbers from the strategy table) | Works on |
+|---|---|---|
+| **Daily bot**: decides at each close what to hold from the next open | 1 pairs, 5 momentum, 8 seasonality, 9 volatility breakout, 10 machine learning, 11 chart patterns, 12 sentiment, 13 deep reinforcement learning, 14 adaptive, 15 genetic algorithm | daily bars |
+| **Intraday bot**: works inside the trading day | 2 scalping, 3 smart order routing, 4 market making, 6 TWAP, 7 VWAP and implementation shortfall | 5-minute bars |
+
+Why two: the split is by clock. The ten daily strategies answer the same question, "what should I hold
+tomorrow?", so they share one backtest, one paper account and one no-look-ahead rule. The five
+intraday ones work within a session. TWAP and VWAP carry out orders rather than pick them, and
+scalping, routing and market making can't be run from a retail account at all (see the table below).
+
+### Quick start
 
 ```sh
+pip install numpy
+python -m strategy_bots ingest <saved get_equity_historicals results>  # Robinhood connector -> data/daily, data/intraday
+python -m strategy_bots backtest                      # all ten daily strategies vs equal weight and SPY
+python -m strategy_bots backtest --strategy momentum --param lookback=63 --start 2023-01-03
+python -m strategy_bots signal --strategy genetic    # targets for the next open, and why
+python -m strategy_bots paper --strategy momentum    # advance the paper account in state/strategy_bots/
+python -m strategy_bots execute --bars data/intraday/SPY_5minute.csv --qty 20000 --minutes 60
+python -m strategy_bots route
+python -m strategy_bots scalp --bars data/intraday/SPY_5minute.csv --equity 10000
+python -m strategy_bots make-market --bars data/intraday/AAPL_5minute.csv
+```
+
+Any CSV with `date,open,high,low,close,volume` in `data/daily/SYMBOL.csv` works too (the `quantbot`
+branch's `data/*.csv` files are in that format). `data/` is git-ignored: the bars come from your broker's
+connector and aren't republished in this public repo. `--param STRATEGY.KEY=VALUE` overrides any
+default (a value is read as JSON when it parses), e.g. `--param 'pairs.pairs=[["GOOGL","META"]]'`.
+
+### The daily bot
+
+| # | Strategy | Rule |
+|---|---|---|
+| 1 | `pairs` | Every 21 days, tests KO/PEP, V/MA and XOM/CVX for cointegration over the last 250 days (Engle-Granger, 5%). A pair that passed trades when its spread is stretched 2σ: long the cheap leg, short the rich one, out at 0.5σ, a 4σ stop, 30 days or a failed retest. **Needs short selling.** |
+| 5 | `momentum` | Monthly, up to 5 names with the best 6-month return (skipping the last month) that are above their 200-day average with RSI above 50; a name that loses its trend is sold early. |
+| 8 | `seasonality` | Holds SPY over the turn of the month (the last trading day and the first three), skipping calendar months that have been weak in past years (z-score below −1). Calendar spreads need futures or options, which this bot doesn't trade. |
+| 9 | `vol_breakout` | After a Bollinger squeeze (bandwidth in the bottom 20% of its last 120 days), buys a close above the upper band; 3-ATR trailing stop; positions sized to 20% volatility. |
+| 10 | `ml` | A random forest, a neural net and a linear SVM, averaged, estimate the chance each stock is up 5 days later from 10 price features. Retrained every 126 days on the last 3 years; buys up to 5 names above 53%. |
+| 11 | `patterns` | Zigzag swing pivots find inverse head and shoulders, double bottoms, ascending triangles and bull flags; buys the breakout with a stop under the pattern and a measured-move target; the bearish versions sell. |
+| 12 | `sentiment` | Scores headlines with a finance word list (handles "fails to beat") and buys good news in an uptrend. Reads `inputs/headlines.csv` (`date,symbol,headline`); `headlines --feed URL --symbols ...` appends from any RSS or Atom feed. |
+| 13 | `rl` | A deep Q-network (experience replay, target network) learns flat or long for each stock, deciding weekly; retrained yearly on the last 3 years. |
+| 14 | `adaptive` | Kaufman's efficiency ratio picks each stock's regime: follow an adaptive moving average (KAMA) in a trend, buy 2-day-RSI dips in chop; volatility-targeted sizes. |
+| 15 | `genetic` | Every 6 months, evolves a trend-plus-RSI rule (fast and slow average, RSI length and floor) on the last 3 years, scored on Sharpe ratio after costs and a turnover penalty. |
+
+How the backtest keeps itself honest:
+
+- A decision made at day t's close trades at day t+1's open and is held to the next open, so no
+  strategy trades at a price it has already seen. Costs are 5 bps per unit of turnover (`--cost-bps`).
+- The learners (10, 13, 15) retrain walk-forward, only on samples whose outcome was known by then.
+- A test cuts the future off the data and checks that no strategy changes a decision it already made.
+- Scoring starts after the longest warm-up (the RL agent needs three years), so every strategy is scored
+  on the same days.
+- Simplification: weights are held constant between decisions, which implies free daily rebalancing.
+  The benchmarks are held the same way.
+
+### Results on real data
+
+Daily bars for 20 stocks and ETFs from the Robinhood connector (AAPL, MSFT, NVDA, GOOGL, AMZN, META,
+AVGO, AMD, MU, INTC, MRVL, BKNG, KO, PEP, V, MA, XOM, CVX, SPY, QQQ), 1/2/2019 to 11/6/2026, scored
+1/7/2022 to 11/5/2026 (4.8 years), default parameters:
+
+| # | Strategy | CAGR | Volatility | Sharpe | Max drawdown | Turnover/yr | In the market |
+|---|---|---:|---:|---:|---:|---:|---:|
+| 1 | pairs | -0.1% | 0.5% | -0.25 | -1.5% | 0.4x | 0% |
+| 5 | momentum | 24.1% | 28.5% | 0.90 | -26.9% | 10.3x | 80% |
+| 8 | seasonality | 1.9% | 7.2% | 0.29 | -11.6% | 24.1x | 16% |
+| 9 | vol_breakout | 11.3% | 13.9% | 0.84 | -15.8% | 21.5x | 66% |
+| 10 | ml | -2.5% | 23.3% | 0.01 | -35.8% | 8.0x | 99% |
+| 11 | patterns | 14.9% | 21.7% | 0.75 | -37.9% | 31.2x | 85% |
+| 12 | sentiment | no headline history to test | | | | | |
+| 13 | rl | 23.1% | 34.5% | 0.77 | -43.3% | 23.9x | 94% |
+| 14 | adaptive | 9.3% | 14.2% | 0.69 | -16.2% | 62.0x | 75% |
+| 15 | genetic | 12.0% | 12.7% | 0.95 | -20.4% | 8.4x | 55% |
+| | equal weight, all 20 | 22.4% | 23.2% | 0.99 | -31.8% | | 100% |
+| | buy and hold SPY | 9.8% | 17.5% | 0.62 | -26.0% | | 100% |
+
+What it says, and what it doesn't:
+
+- **Nothing beat holding all 20 names equally** on risk-adjusted return. Momentum earned a little more
+  (24.1% a year against 22.4%) with a shallower worst drop (−27% against −32%), but it swung more, so
+  its Sharpe ratio is lower. RL matched the return with a −43% drawdown, the worst in the table.
+- **Lower risk is what some of them bought.** The volatility breakout, adaptive and genetic bots were
+  in the market 55–75% of the time and lost 16–20% at worst, against 32% for equal weight and 26% for
+  SPY, while earning about as much as SPY or more.
+- **The universe flatters anything long.** These 20 names were picked in 2026 and include NVDA and
+  AVGO, so equal weight, momentum and RL ride hindsight. Survivorship bias is real here.
+- **Pairs and ML didn't work in this sample.** The three classic pairs were rarely cointegrated in
+  2019–2026, so pairs barely traded. ML's 5-day forecasts added nothing: −2.5% a year while almost
+  always invested.
+- The defaults were written before this test and not tuned to it. Tune on one period and check on
+  another, or the next table will look better than the future. One sample, one universe: not
+  investment advice.
+
+### The intraday bot
+
+| # | Strategy | Rule | From a retail account? |
+|---|---|---|---|
+| 6 | TWAP | Equal slices over the window | Yes, by hand or with a broker algo |
+| 7 | VWAP | Slices follow the usual volume curve, learned from earlier sessions; implementation shortfall (Almgren-Chriss) front-loads by `--urgency` | Yes |
+| 2 | Scalping | Buying pressure in the last 3 bars (volume of up bars minus down bars) plus a break of the last bar's high; 15 bp target, 10 bp stop, 6 bars at most | Under $25,000 in a margin account, only 3 day trades per 5 business days (the pattern-day-trader rule), which the bot enforces |
+| 3 | Smart order routing | Learns each venue's real fill rate and ranks venues by price plus the expected cost of a miss | No: brokers route retail orders themselves |
+| 4 | Market making | Avellaneda-Stoikov quotes that lean against inventory; optional statistical-arbitrage lean from a correlated stock | No: needs exchange access, rebates and speed |
+
+On SPY and AAPL 5-minute bars, 10/19 to 11/6/2026 (15 sessions):
+
+- **Execution**: buying 20,000 SPY in the first hour of 11/6 cost +7.8 bps against the hour's VWAP with
+  TWAP, +3.4 with VWAP and +0.1 with implementation shortfall. Against the 9:30 price all three paid
+  55–63 bps, because SPY rallied that hour.
+- **Routing** (simulated venues): the adaptive router filled 100% at 1.54 bps over the arrival mid. The
+  static router filled 93% at 2.55 bps, because it kept sending 62% of its flow to a venue that shows the
+  best price but fills only 20%.
+- **Scalping** SPY: a $10,000 account got 9 trades (70 more signals were blocked by the PDT rule) for
+  +11.4 bps in total. A $30,000 account got 55 trades for −27.5 bps: the edge doesn't cover the spread.
+- **Market making**, 10-share lots: −$30 on AAPL, −$289 on SPY, and −$102 on AAPL with SPY as the
+  stat-arb reference. The bars that trade through your bid are the ones that keep falling (adverse
+  selection), and this bar-based fill model is still kinder than a real queue.
+
+## Tests
+
+```sh
+pip install numpy   # the strategy bots need it; the bottom-confirmation bots are standard library only
 python -m unittest discover -s tests -t .
 ```

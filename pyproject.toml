@@ -5,16 +5,20 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "bottom-bots"
 version = "0.1.0"
-description = "Six bots that score the five-signal capitulation-bottom checklist: VIX, put/call, dealer gamma, short interest, flows and sentiment."
+description = "Bottom-confirmation bots for the five-signal capitulation checklist, and two paper-trading strategy bots (daily and intraday)."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
 
+[project.optional-dependencies]
+strategy = ["numpy>=1.22"]  # strategy_bots; bottom_bots needs only the standard library
+
 [project.scripts]
 bottom-bots = "bottom_bots.cli:main"
+strategy-bots = "strategy_bots.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["bottom_bots*"]
+include = ["bottom_bots*", "strategy_bots*"]
 
 [tool.setuptools.package-data]
 bottom_bots = ["thresholds.toml"]
