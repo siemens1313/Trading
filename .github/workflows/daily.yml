@@ -1,0 +1,58 @@
+name: daily checklist
+
+# Weekdays at 11:50 Chicago time: score the last completed session and save the result
+# to the bottom-bots-state branch, where a scheduled task picks it up and emails it.
+# GitHub cron is UTC, so the two entries are 11:50 CDT and 11:50 CST; scripts/daily.sh
+# keeps the one that matches the day.
+on:
+  schedule:
+    - cron: "50 16 * * 1-5"
+    - cron: "50 17 * * 1-5"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "bottom_bots/**"
+      - "scripts/daily.sh"
+      - ".github/workflows/daily.yml"
+
+concurrency:
+  group: daily-checklist
+  cancel-in-progress: false
+
+jobs:
+  daily:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # push the bottom-bots-state branch
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: bottom-bots-state
+          path: state
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: scripts/daily.sh
+        env:
+          SCHEDULE: ${{ github.event.schedule }}
+
+  # Pull requests: the same run against live data, without committing or pushing.
+  smoke:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: bottom-bots-state
+          path: state
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: scripts/daily.sh
+        env:
+          DRY_RUN: "1"

@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+/build/
+/dist/
+# Runtime state: fetched-data cache, run history, daily reports.
+/state/
+# Market data for the strategy bots: rebuilt with `python -m strategy_bots ingest`, not republished.
+/data/

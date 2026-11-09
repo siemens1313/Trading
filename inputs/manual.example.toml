@@ -1,0 +1,66 @@
+# The article's own readings ("现在的位置", 10/23/2026), entered as manual inputs.
+# Reproduce its conclusion:
+#   python -m bottom_bots run --offline --manual inputs/manual.example.toml --as-of 2026-10-23 --no-save
+#
+# Format: one [[metric]] table per dated reading. Units are listed by `python -m bottom_bots list`
+# and in bottom_bots/manual.py. `source` is optional and shows up in the report.
+
+[[vix]]
+date = 2026-10-23
+value = 19.45
+source = "article"
+
+[[vix3m]]
+date = 2026-10-23
+value = 20.48
+source = "article"
+
+[[vxn]]
+date = 2026-10-23
+value = 28.30
+source = "article"
+
+[[pc_total]]
+date = 2026-10-23
+value = 0.93
+source = "article"
+
+[[pc_index]]
+date = 2026-10-23
+value = 1.10
+source = "article"
+
+[[pc_equity]]
+date = 2026-10-23
+value = 0.67
+source = "article"
+
+# The article's only gamma figure is a QQQ-chain model estimate from 10/16. By 10/23 it is
+# a week old, so the gamma bot correctly reports it as stale (UNKNOWN), not as current.
+[[gex]]
+date = 2026-10-16
+value = -6.5
+source = "article: QQQ chain model"
+
+[[aaii_bearish]]
+date = 2026-10-23
+value = 45.8
+source = "article"
+
+[[fear_greed]]
+date = 2026-10-23
+value = 21
+source = "article"
+
+[[naaim]]
+date = 2026-10-23
+value = 87.7
+source = "article"
+
+[[breadth_200dma]]
+date = 2026-10-23
+value = 57
+source = "article"
+
+# The article gives no short-interest numbers or ETF flow figures for 10/23, so those
+# checklist inputs are left out and show as UNKNOWN.
