@@ -17,11 +17,11 @@ from pathlib import Path
 import numpy as np
 
 from . import backtest, text
-from .data import DataError, Panel, ingest_robinhood, load_panel, load_sessions
+from .data import DataError, ingest_robinhood, load_panel, load_sessions
 from .daily import STRATEGIES
 from .daily.base import DailyStrategy
 from .intraday import INTRADAY, execution, market_making, scalping, sor
-from .paper import PaperAccount
+from .paper import PaperAccount, advance, targets
 
 DAILY_DIR = Path("data/daily")
 STATE_DIR = Path("state/strategy_bots")
@@ -61,10 +61,11 @@ def _parser() -> argparse.ArgumentParser:
     _daily_args(sig, many=False)
     sig.set_defaults(func=_signal)
 
-    paper = sub.add_parser("paper", help="advance a paper account: fill pending targets at each open, set new ones at the close")
-    _daily_args(paper, many=False)
+    paper = sub.add_parser("paper", help="advance paper accounts: fill pending targets at each open, set new ones at the close")
+    _daily_args(paper, many=True)
     paper.add_argument("--capital", type=float, default=10_000.0, help="starting cash for a new account (default: 10000)")
-    paper.add_argument("--state", type=Path, help="account file (default: state/strategy_bots/paper_STRATEGY.json)")
+    paper.add_argument("--since", help="open a new account at this close (YYYY-MM-DD) and replay the days since (default: the latest close)")
+    paper.add_argument("--state-dir", type=Path, default=STATE_DIR, help="folder of paper_STRATEGY.json accounts (default: state/strategy_bots)")
     paper.set_defaults(func=_paper)
 
     news = sub.add_parser("headlines", help="append headlines from an RSS or Atom feed, for the sentiment strategy")
@@ -196,12 +197,14 @@ def _num(x: float, digits: int = 2) -> str:
     return "n/a" if x is None or not math.isfinite(x) else f"{x:.{digits}f}"
 
 
-def _table(headers: list[str], rows: list[list[str]], left: int = 1) -> str:
-    """Columns padded to fit; the first `left` columns are left-aligned, the rest right-aligned."""
+def _table(headers: list[str], rows: list[list[str]], left: int = 1, align: str = "") -> str:
+    """Columns padded to fit: the first `left` columns left-aligned and the rest right-aligned, unless
+    `align` spells out every column ("l" or "r")."""
     widths = [max(len(str(r[i])) for r in [headers, *rows]) for i in range(len(headers))]
+    align = align or "l" * left + "r" * (len(headers) - left)
 
     def line(cells):
-        return "  ".join(str(c).ljust(w) if i < left else str(c).rjust(w) for i, (c, w) in enumerate(zip(cells, widths)))
+        return "  ".join(str(c).ljust(w) if a == "l" else str(c).rjust(w) for c, w, a in zip(cells, widths, align)).rstrip()
 
     return "\n".join([line(headers), *(line(r) for r in rows)])
 
@@ -263,17 +266,13 @@ def _backtest(args) -> int:
     return 0
 
 
-def _targets(panel: Panel, row: np.ndarray) -> dict[str, float]:
-    return {s: round(float(w), 6) for s, w in zip(panel.symbols, row) if abs(w) > 1e-9}
-
-
-def _print_targets(targets: dict[str, float], indent: str = "  ") -> None:
-    if not targets:
+def _print_targets(wanted: dict[str, float], indent: str = "  ") -> None:
+    if not wanted:
         print(f"{indent}no positions: all cash")
         return
-    for s, w in sorted(targets.items(), key=lambda kv: -abs(kv[1])):
+    for s, w in sorted(wanted.items(), key=lambda kv: -abs(kv[1])):
         print(f"{indent}{s:6} {w * 100:+6.1f}%")
-    gross, net = sum(abs(w) for w in targets.values()), sum(targets.values())
+    gross, net = sum(abs(w) for w in wanted.values()), sum(wanted.values())
     print(f"{indent}{'cash':6} {(1 - net) * 100:+6.1f}%" + (f"   (gross {gross * 100:.0f}%, net {net * 100:.0f}%)" if gross > net + 1e-9 else ""))
 
 
@@ -283,7 +282,7 @@ def _signal(args) -> int:
     weights = s.weights(panel)
     print(f"#{s.number} {s.title}")
     print(f"Targets decided at the {panel.dates[-1]} close, to trade at the next open:")
-    _print_targets(_targets(panel, weights[-1]))
+    _print_targets(targets(panel.symbols, weights[-1]))
     for line in s.describe(panel):
         print(f"  - {line}")
     if len(panel) <= s.warmup():
@@ -293,38 +292,53 @@ def _signal(args) -> int:
 
 def _paper(args) -> int:
     panel = load_panel(args.data, args.symbols)
-    (s,) = _strategies(args)
-    path = args.state or STATE_DIR / f"paper_{s.name}.json"
-    account = PaperAccount.open(path, args.capital)
-    weights = s.weights(panel)
-    dates = [str(d) for d in panel.dates]
-    if account.pending and account.pending["decided"] > dates[-1]:
-        raise DataError(f"{path} has targets from {account.pending['decided']}, after the last bar ({dates[-1]}): is the data stale?")
-    first = len(panel) - 1
-    if account.pending:
-        first = next((t for t, d in enumerate(dates) if d > account.pending["decided"]), len(panel) - 1)
-    fills = []
-    for t in range(first, len(panel)):
-        if account.pending and account.pending["decided"] < dates[t]:
-            opens = {sym: float(panel.open[t, j]) for j, sym in enumerate(panel.symbols)}
-            fills += account.rebalance(account.pending["targets"], opens, dates[t], args.cost_bps)
-        account.pending = {"decided": dates[t], "targets": _targets(panel, weights[t])}
+    last = str(panel.dates[-1])
     closes = {sym: float(panel.close[-1, j]) for j, sym in enumerate(panel.symbols)}
-    value = account.value(closes)
-    account.save(path)
-    print(f"Paper account for #{s.number} {s.title} ({path})")
+    runs = []
+    for s in _strategies(args):
+        path = args.state_dir / f"paper_{s.name}.json"
+        account = PaperAccount.open(path, args.capital)
+        fills = advance(account, panel, s.weights(panel), args.cost_bps, args.since)
+        account.save(path)
+        runs.append((s, path, account, fills))
+    if len(runs) == 1:
+        _print_account(*runs[0], closes, last)
+        return 0
+    print(f"Paper accounts at the {last} close (fills at each open since the last run, targets for the next open)")
+    rows, trades = [], []
+    for s, _, account, fills in runs:
+        marks = [account.marks[d] for d in sorted(account.marks)]
+        value = marks[-1]
+        day = _pct(marks[-1] / marks[-2] - 1, 2) if len(marks) > 1 else "n/a"
+        total = _pct(value / account.capital - 1, 2) if account.capital else "n/a"
+        nxt = ", ".join(f"{sym} {w * 100:.0f}%" for sym, w in sorted(account.pending["targets"].items(), key=lambda kv: -abs(kv[1])))
+        today = [f for f in fills if f["date"] == last]
+        rows.append([f"#{s.number}", s.name, f"${value:,.2f}", day, total, account.opened, str(len(today)), nxt or "cash"])
+        if today:
+            trades.append(f"  {s.name}: " + ", ".join(f"{f['shares']:+g} {f['symbol']} @ {f['price']:.2f}" for f in today))
+    print(_table(["#", "strategy", "value", "day", "since open", "opened", "trades", "next open"], rows, align="llrrrrrl"))
+    if trades:
+        print(f"\nTrades at the {last} open:")
+        print("\n".join(trades))
+    print(f"\nAccounts in {args.state_dir}. Paper only: nothing was sent to a broker.")
+    return 0
+
+
+def _print_account(s: DailyStrategy, path: Path, account: PaperAccount, fills: list[dict], closes: dict, last: str) -> None:
+    value = account.marks[last]
+    print(f"Paper account for #{s.number} {s.title} ({path}), opened at the {account.opened} close")
     for f in fills:
         side = "bought" if f["shares"] > 0 else "sold"
         print(f"  {f['date']} open: {side} {abs(f['shares']):g} {f['symbol']} at {f['price']:.2f} (cost ${f['fee']:.2f})")
     if not fills:
         print("  no fills this run")
-    print(f"Value at the {dates[-1]} close: ${value:,.2f}, of which cash ${account.cash:,.2f}")
+    since = f" ({_pct(value / account.capital - 1, 2)} since it opened)" if account.capital else ""
+    print(f"Value at the {last} close: ${value:,.2f}{since}, of which cash ${account.cash:,.2f}")
     for sym, shares in sorted(account.positions.items()):
         worth = shares * closes[sym]
         print(f"  {sym:6} {shares:>12.4f} shares  ${worth:>12,.2f}  {worth / value * 100:5.1f}%")
-    print(f"Targets for the next open (decided at the {dates[-1]} close):")
+    print(f"Targets for the next open (decided at the {last} close):")
     _print_targets(account.pending["targets"])
-    return 0
 
 
 def _headlines(args) -> int:

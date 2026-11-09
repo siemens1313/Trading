@@ -183,17 +183,36 @@ python -m strategy_bots ingest <saved get_equity_historicals results>  # Robinho
 python -m strategy_bots backtest                      # all ten daily strategies vs equal weight and SPY
 python -m strategy_bots backtest --strategy momentum --param lookback=63 --start 2023-01-03
 python -m strategy_bots signal --strategy genetic    # targets for the next open, and why
-python -m strategy_bots paper --strategy momentum    # advance the paper account in state/strategy_bots/
+python -m strategy_bots paper --since 2026-11-06     # advance all ten paper accounts (state/strategy_bots/)
 python -m strategy_bots execute --bars data/intraday/SPY_5minute.csv --qty 20000 --minutes 60
 python -m strategy_bots route
 python -m strategy_bots scalp --bars data/intraday/SPY_5minute.csv --equity 10000
 python -m strategy_bots make-market --bars data/intraday/AAPL_5minute.csv
 ```
 
+`paper` with no `--strategy` advances all ten accounts at once and prints one table. Each account is a
+JSON file in `state/strategy_bots/` (git-ignored). `--since DATE` opens new accounts at that close and
+replays the days since. Because no strategy looks ahead, a replay ends exactly where daily runs would
+have, so a lost state folder costs nothing: run the same command again.
+
 Any CSV with `date,open,high,low,close,volume` in `data/daily/SYMBOL.csv` works too (the `quantbot`
 branch's `data/*.csv` files are in that format). `data/` is git-ignored: the bars come from your broker's
 connector and aren't republished in this public repo. `--param STRATEGY.KEY=VALUE` overrides any
 default (a value is read as JSON when it parses), e.g. `--param 'pairs.pairs=[["GOOGL","META"]]'`.
+
+### Weekday paper trading
+
+A Claude scheduled task (set up in the owner's account, outside this repo) runs the daily bot at
+8:13 pm New York time on weekdays. By then the UTC day has rolled over, which the Robinhood connector
+needs before it returns the day's bar. The task:
+
+1. fetches daily bars since 2019 for the 20 symbols with the connector's `get_equity_historicals`, its
+   only Robinhood call;
+2. ingests them;
+3. runs `python -m strategy_bots paper --since 2026-11-06`;
+4. reports the table.
+
+It never places, changes or cancels an order.
 
 ### The daily bot
 

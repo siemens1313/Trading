@@ -22,7 +22,8 @@ from strategy_bots.data import (
     load_sessions,
     synthetic_panel,
 )
-from strategy_bots.paper import PaperAccount
+from strategy_bots.daily import STRATEGIES
+from strategy_bots.paper import PaperAccount, advance
 
 
 def write_daily(path: Path, rows: list[tuple]) -> None:
@@ -229,6 +230,45 @@ class PaperTests(unittest.TestCase):
         again = PaperAccount.open(path, 1.0)
         self.assertEqual(again.cash, 5_000.0)
         self.assertEqual(again.pending, acct.pending)
+
+
+class AdvanceTests(unittest.TestCase):
+    def setUp(self):
+        self.panel = synthetic_panel(days=320)
+        self.strategy = STRATEGIES["momentum"]
+
+    def test_a_replay_matches_daily_runs(self):
+        since = str(self.panel.dates[290])
+        daily = PaperAccount(cash=10_000.0, capital=10_000.0)
+        for n in range(291, len(self.panel) + 1):
+            head = self.panel.head(n)
+            advance(daily, head, self.strategy().weights(head), since=since)
+        replay = PaperAccount(cash=10_000.0, capital=10_000.0)
+        fills = advance(replay, self.panel, self.strategy().weights(self.panel), since=since)
+        self.assertTrue(fills)
+        self.assertEqual(replay.positions, daily.positions)
+        self.assertAlmostEqual(replay.cash, daily.cash, places=6)
+        self.assertEqual(replay.marks, daily.marks)
+        self.assertEqual(replay.pending, daily.pending)
+        self.assertEqual((replay.opened, daily.opened), (since, since))
+
+    def test_first_targets_wait_for_the_next_open(self):
+        account = PaperAccount(cash=1_000.0, capital=1_000.0)
+        weights = np.full(self.panel.close.shape, 0.25)
+        self.assertEqual(advance(account, self.panel.head(100), weights[:100]), [])
+        self.assertEqual(account.pending["decided"], str(self.panel.dates[99]))
+        fills = advance(account, self.panel.head(101), weights[:101])
+        self.assertEqual({f["date"] for f in fills}, {str(self.panel.dates[100])})
+        self.assertAlmostEqual(fills[0]["price"], float(self.panel.open[100, 0]))
+
+    def test_refuses_stale_data_and_a_start_after_the_data(self):
+        account = PaperAccount(cash=1_000.0)
+        weights = np.zeros(self.panel.close.shape)
+        advance(account, self.panel, weights)
+        with self.assertRaises(ValueError):
+            advance(account, self.panel.head(300), weights[:300])
+        with self.assertRaises(ValueError):
+            advance(PaperAccount(cash=1.0), self.panel, weights, since="2099-01-01")
 
 
 class ModelTests(unittest.TestCase):

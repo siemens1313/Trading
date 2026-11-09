@@ -95,8 +95,9 @@ class CliTests(unittest.TestCase):
         self.assertIn("trend-following:", out)
 
     def test_paper_account_catches_up_then_waits(self):
-        state = self.dir / "state" / "acct.json"
-        common = ["--strategy", "seasonality", "--param", 'symbols=["AAA"]', "--state", str(state)]
+        state_dir = self.dir / "state"
+        state = state_dir / "paper_seasonality.json"
+        common = ["--strategy", "seasonality", "--param", 'symbols=["AAA"]', "--state-dir", str(state_dir)]
         code, out, _ = run("paper", "--data", str(self.dir / "daily_old"), *common)
         self.assertEqual(code, 0, out)
         self.assertIn("no fills this run", out)
@@ -107,6 +108,7 @@ class CliTests(unittest.TestCase):
         account = json.loads(state.read_text())
         self.assertEqual(account["pending"]["decided"], str(self.panel.dates[-1]))
         self.assertEqual(len(account["history"]), 4)  # one rebalance at each of the four new opens
+        self.assertEqual(sorted(account["marks"]), [str(d) for d in self.panel.dates[-5:]])
 
         code, out, _ = run("paper", "--data", str(self.dir / "daily"), *common)
         self.assertIn("no fills this run", out)
@@ -115,6 +117,25 @@ class CliTests(unittest.TestCase):
         code, _, err = run("paper", "--data", str(self.dir / "daily_old"), *common)
         self.assertEqual(code, 2)
         self.assertIn("stale", err)
+
+    def test_paper_runs_several_accounts_from_a_start_date(self):
+        state_dir = self.dir / "several"
+        since = str(self.panel.dates[-10])
+        code, out, _ = run(
+            "paper", "--strategy", "momentum", "--strategy", "adaptive", "--data", str(self.dir / "daily"),
+            "--state-dir", str(state_dir), "--since", since, "--capital", "5000",
+        )
+        self.assertEqual(code, 0, out)
+        self.assertIn(f"Paper accounts at the {self.panel.dates[-1]} close", out)
+        for name in ("momentum", "adaptive"):
+            account = json.loads((state_dir / f"paper_{name}.json").read_text())
+            self.assertEqual(account["opened"], since)
+            self.assertEqual(account["capital"], 5000)
+            self.assertEqual(len(account["marks"]), 10)
+            self.assertIn(name, out)
+        code, _, err = run("paper", "--data", str(self.dir / "daily"), "--state-dir", str(self.dir / "late"), "--since", "2099-01-01")
+        self.assertEqual(code, 2)
+        self.assertIn("no bars on or after 2099-01-01", err)
 
     def test_ingest(self):
         doc = {"data": {"results": [{"symbol": "QQQ", "interval": "day", "bars": [
