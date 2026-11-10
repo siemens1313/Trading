@@ -1,174 +1,174 @@
 {
- "ingested_at": "2026-11-06T18:37:00+00:00",
+ "ingested_at": "2026-11-09T18:48:49+00:00",
  "source": "robinhood connector (get_equity_quotes)",
  "quotes": {
   "SPY": {
-   "bid": 738.67,
-   "ask": 738.71,
-   "last": 738.69,
-   "time": "2026-11-06T18:35:37Z",
-   "prev_close": 733.0,
-   "prev_close_date": "2026-11-05"
+   "bid": 753.3,
+   "ask": 753.31,
+   "last": 753.3,
+   "time": "2026-11-09T18:48:30Z",
+   "prev_close": 735.29,
+   "prev_close_date": "2026-11-06"
   },
   "QQQ": {
-   "bid": 658.62,
-   "ask": 658.66,
-   "last": 658.67,
-   "time": "2026-11-06T18:35:37Z",
-   "prev_close": 647.05,
-   "prev_close_date": "2026-11-05"
+   "bid": 678.45,
+   "ask": 678.48,
+   "last": 678.48,
+   "time": "2026-11-09T18:48:30Z",
+   "prev_close": 656.1,
+   "prev_close_date": "2026-11-06"
   },
   "IWM": {
-   "bid": 274.46,
-   "ask": 274.48,
-   "last": 274.46,
-   "time": "2026-11-06T18:35:35Z",
-   "prev_close": 270.98,
-   "prev_close_date": "2026-11-05"
+   "bid": 282.37,
+   "ask": 282.39,
+   "last": 282.38,
+   "time": "2026-11-09T18:48:30Z",
+   "prev_close": 273.67,
+   "prev_close_date": "2026-11-06"
   },
   "EFA": {
-   "bid": 102.21,
-   "ask": 102.22,
-   "last": 102.215,
-   "time": "2026-11-06T18:35:37Z",
-   "prev_close": 102.7,
-   "prev_close_date": "2026-11-05"
+   "bid": 104.63,
+   "ask": 104.64,
+   "last": 104.635,
+   "time": "2026-11-09T18:48:31Z",
+   "prev_close": 101.89,
+   "prev_close_date": "2026-11-06"
   },
   "EEM": {
-   "bid": 59.45,
-   "ask": 59.46,
-   "last": 59.45,
-   "time": "2026-11-06T18:35:35Z",
-   "prev_close": 58.05,
-   "prev_close_date": "2026-11-05"
+   "bid": 60.87,
+   "ask": 60.88,
+   "last": 60.87,
+   "time": "2026-11-09T18:48:30Z",
+   "prev_close": 59.33,
+   "prev_close_date": "2026-11-06"
   },
   "TLT": {
-   "bid": 82.16,
-   "ask": 82.17,
-   "last": 82.1601,
-   "time": "2026-11-06T18:35:32Z",
-   "prev_close": 81.93,
-   "prev_close_date": "2026-11-05"
+   "bid": 81.93,
+   "ask": 81.94,
+   "last": 81.9332,
+   "time": "2026-11-09T18:48:22Z",
+   "prev_close": 81.92,
+   "prev_close_date": "2026-11-06"
   },
   "IEF": {
-   "bid": 91.95,
-   "ask": 91.97,
-   "last": 91.96,
-   "time": "2026-11-06T18:35:29Z",
-   "prev_close": 91.97,
-   "prev_close_date": "2026-11-05"
+   "bid": 91.73,
+   "ask": 91.74,
+   "last": 91.7394,
+   "time": "2026-11-09T18:48:11Z",
+   "prev_close": 91.86,
+   "prev_close_date": "2026-11-06"
   },
   "GLD": {
-   "bid": 372.73,
-   "ask": 372.76,
-   "last": 372.7306,
-   "time": "2026-11-06T18:35:30Z",
-   "prev_close": 375.49,
-   "prev_close_date": "2026-11-05"
+   "bid": 376.06,
+   "ask": 376.08,
+   "last": 376.065,
+   "time": "2026-11-09T18:48:26Z",
+   "prev_close": 372.52,
+   "prev_close_date": "2026-11-06"
   },
   "DBC": {
-   "bid": 31.4,
-   "ask": 31.42,
-   "last": 31.405,
-   "time": "2026-11-06T18:35:06Z",
-   "prev_close": 31.47,
-   "prev_close_date": "2026-11-05"
+   "bid": 31.12,
+   "ask": 31.13,
+   "last": 31.125,
+   "time": "2026-11-09T18:44:42Z",
+   "prev_close": 31.54,
+   "prev_close_date": "2026-11-06"
   },
   "VNQ": {
-   "bid": 96.09,
-   "ask": 96.1,
-   "last": 96.095,
-   "time": "2026-11-06T18:35:06Z",
-   "prev_close": 96.23,
-   "prev_close_date": "2026-11-05"
+   "bid": 97.74,
+   "ask": 97.75,
+   "last": 97.745,
+   "time": "2026-11-09T18:48:30Z",
+   "prev_close": 95.73,
+   "prev_close_date": "2026-11-06"
   },
   "XLK": {
-   "bid": 164.99,
-   "ask": 165.01,
-   "last": 165.0,
-   "time": "2026-11-06T18:35:38Z",
-   "prev_close": 162.38,
-   "prev_close_date": "2026-11-05"
+   "bid": 170.59,
+   "ask": 170.61,
+   "last": 170.6,
+   "time": "2026-11-09T18:48:29Z",
+   "prev_close": 164.74,
+   "prev_close_date": "2026-11-06"
   },
   "XLF": {
-   "bid": 57.45,
-   "ask": 57.46,
-   "last": 57.455,
-   "time": "2026-11-06T18:35:37Z",
-   "prev_close": 57.5,
-   "prev_close_date": "2026-11-05"
+   "bid": 58.19,
+   "ask": 58.2,
+   "last": 58.19,
+   "time": "2026-11-09T18:48:24Z",
+   "prev_close": 57.16,
+   "prev_close_date": "2026-11-06"
   },
   "XLE": {
-   "bid": 62.03,
-   "ask": 62.04,
-   "last": 62.03,
-   "time": "2026-11-06T18:35:33Z",
-   "prev_close": 61.63,
-   "prev_close_date": "2026-11-05"
+   "bid": 61.86,
+   "ask": 61.87,
+   "last": 61.87,
+   "time": "2026-11-09T18:48:28Z",
+   "prev_close": 61.62,
+   "prev_close_date": "2026-11-06"
   },
   "XLV": {
-   "bid": 185.72,
-   "ask": 185.73,
-   "last": 185.75,
-   "time": "2026-11-06T18:35:35Z",
-   "prev_close": 184.91,
-   "prev_close_date": "2026-11-05"
+   "bid": 188.59,
+   "ask": 188.61,
+   "last": 188.6,
+   "time": "2026-11-09T18:48:30Z",
+   "prev_close": 184.8,
+   "prev_close_date": "2026-11-06"
   },
   "XLY": {
-   "bid": 118.58,
-   "ask": 118.59,
-   "last": 118.585,
-   "time": "2026-11-06T18:35:37Z",
-   "prev_close": 117.64,
-   "prev_close_date": "2026-11-05"
+   "bid": 121.34,
+   "ask": 121.35,
+   "last": 121.34,
+   "time": "2026-11-09T18:48:29Z",
+   "prev_close": 117.58,
+   "prev_close_date": "2026-11-06"
   },
   "XLP": {
-   "bid": 90.64,
-   "ask": 90.65,
-   "last": 90.645,
-   "time": "2026-11-06T18:35:36Z",
-   "prev_close": 91.25,
-   "prev_close_date": "2026-11-05"
+   "bid": 90.92,
+   "ask": 90.93,
+   "last": 90.925,
+   "time": "2026-11-09T18:48:30Z",
+   "prev_close": 90.08,
+   "prev_close_date": "2026-11-06"
   },
   "XLI": {
-   "bid": 163.26,
-   "ask": 163.28,
-   "last": 163.269,
-   "time": "2026-11-06T18:35:34Z",
-   "prev_close": 162.47,
-   "prev_close_date": "2026-11-05"
+   "bid": 169.07,
+   "ask": 169.08,
+   "last": 169.08,
+   "time": "2026-11-09T18:48:30Z",
+   "prev_close": 162.67,
+   "prev_close_date": "2026-11-06"
   },
   "XLB": {
-   "bid": 52.32,
-   "ask": 52.33,
-   "last": 52.325,
-   "time": "2026-11-06T18:35:33Z",
-   "prev_close": 52.33,
-   "prev_close_date": "2026-11-05"
+   "bid": 53.21,
+   "ask": 53.22,
+   "last": 53.215,
+   "time": "2026-11-09T18:48:30Z",
+   "prev_close": 51.95,
+   "prev_close_date": "2026-11-06"
   },
   "XLU": {
-   "bid": 43.32,
-   "ask": 43.33,
-   "last": 43.32,
-   "time": "2026-11-06T18:35:37Z",
-   "prev_close": 43.3,
-   "prev_close_date": "2026-11-05"
+   "bid": 43.95,
+   "ask": 43.96,
+   "last": 43.955,
+   "time": "2026-11-09T18:48:28Z",
+   "prev_close": 43.13,
+   "prev_close_date": "2026-11-06"
   },
   "XLRE": {
-   "bid": 44.18,
-   "ask": 44.19,
-   "last": 44.19,
-   "time": "2026-11-06T18:35:32Z",
-   "prev_close": 44.3,
-   "prev_close_date": "2026-11-05"
+   "bid": 44.88,
+   "ask": 44.89,
+   "last": 44.885,
+   "time": "2026-11-09T18:48:30Z",
+   "prev_close": 44.0,
+   "prev_close_date": "2026-11-06"
   },
   "XLC": {
-   "bid": 105.4,
-   "ask": 105.41,
-   "last": 105.415,
-   "time": "2026-11-06T18:35:36Z",
-   "prev_close": 104.34,
-   "prev_close_date": "2026-11-05"
+   "bid": 107.12,
+   "ask": 107.13,
+   "last": 107.13,
+   "time": "2026-11-09T18:48:30Z",
+   "prev_close": 104.79,
+   "prev_close_date": "2026-11-06"
   }
  }
 }
