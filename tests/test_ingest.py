@@ -49,3 +49,21 @@ def test_ingest_quotes_validates_transcription(tmp_path):
         q.write_text(bad)
         with pytest.raises(IngestError, match=why):
             ingest_quotes(q, tmp_path / "data", ["AAA"], now=now)
+
+
+def test_quote_passes_when_either_close_field_matches_the_bar(tmp_path):
+    """Robinhood's official close can differ from its bar close by cents (QQQ, 2026-11-10: 674.82 vs 674.76)."""
+    p, last, close = _bars_file(tmp_path, ["AAA"])
+    ingest_bars([p], tmp_path / "data", ["AAA"])
+    now = datetime(2030, 1, 2, 15, 0, tzinfo=timezone.utc)
+    book = f"AAA {close*1.01:.4f} {close*1.0102:.4f} {close*1.0101:.4f} 2030-01-02T14:55:00Z"
+    official = close + 0.06                        # official close disagrees with the bar
+    q = tmp_path / "q.txt"
+    q.write_text(f"{book} {official:.6f} {last:%Y-%m-%d} {close:.6f}\n")   # adjusted close matches the bar
+    assert ingest_quotes(q, tmp_path / "data", ["AAA"], now=now)["quotes"]["AAA"]["adj_prev_close"] == pytest.approx(close)
+    q.write_text(f"{book} {official:.6f} {last:%Y-%m-%d}\n")                # 7 fields: no second chance
+    with pytest.raises(IngestError, match="transcription"):
+        ingest_quotes(q, tmp_path / "data", ["AAA"], now=now)
+    q.write_text(f"{book} {official:.6f} {last:%Y-%m-%d} {close + 0.01:.6f}\n")  # both wrong -> rejected
+    with pytest.raises(IngestError, match="transcription"):
+        ingest_quotes(q, tmp_path / "data", ["AAA"], now=now)

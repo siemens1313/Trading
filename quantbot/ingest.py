@@ -4,10 +4,13 @@ where the sandbox can't reach market-data hosts directly).
 Bars:   the JSON saved by Claude Code when a get_equity_historicals result is too large to show inline
         ({"data": {"results": [{"symbol", "interval", "bars": [...]}]}}). Parsed exactly; nothing is retyped.
 Quotes: one line per symbol, written by Claude from get_equity_quotes:
-            SYMBOL BID ASK LAST QUOTE_TIME_UTC PREV_CLOSE PREV_CLOSE_DATE
-        Because these are transcribed, every line is cross-checked: PREV_CLOSE must equal the exact
-        close in the bar data for PREV_CLOSE_DATE, bid <= ask, the spread must be sane, and LAST must sit
-        near the bid/ask and within 10% of the previous close. Any failure rejects the whole file.
+            SYMBOL BID ASK LAST QUOTE_TIME_UTC PREV_CLOSE PREV_CLOSE_DATE [ADJ_PREV_CLOSE]
+        PREV_CLOSE is the official close (close.price); ADJ_PREV_CLOSE is quote.adjusted_previous_close.
+        Robinhood's official close and its daily bar can differ by a few cents (e.g. QQQ 674.82 vs 674.76
+        on 2026-11-10), so a line passes when EITHER value exactly equals the bar close for PREV_CLOSE_DATE.
+        A transcription typo would have to land exactly on the other field to slip through.
+        Every line is also checked for bid <= ask, a sane spread, LAST near the book and within 10% of the
+        previous close, and freshness. Any failure rejects the whole file.
 """
 from __future__ import annotations
 
@@ -69,12 +72,14 @@ def ingest_quotes(path: str | Path, data_dir: str | Path, symbols: list[str], *,
         if not line:
             continue
         parts = line.split()
-        if len(parts) != 7:
-            errors.append(f"line {ln}: expected 7 fields, got {len(parts)}")
+        if len(parts) not in (7, 8):
+            errors.append(f"line {ln}: expected 7 or 8 fields, got {len(parts)}")
             continue
-        sym, bid, ask, last, ts, prev, prev_date = parts
+        sym, bid, ask, last, ts, prev, prev_date = parts[:7]
+        adj = parts[7] if len(parts) == 8 else None
         try:
             bid, ask, last, prev = float(bid), float(ask), float(last), float(prev)
+            adj = float(adj) if adj is not None else None
             t = datetime.fromisoformat(ts.replace("Z", "+00:00"))
         except ValueError as e:
             errors.append(f"line {ln}: {e}")
@@ -88,8 +93,10 @@ def ingest_quotes(path: str | Path, data_dir: str | Path, symbols: list[str], *,
         if ref is None or (isinstance(ref, float) and math.isnan(ref)):
             errors.append(f"{sym}: no bar for prev-close date {prev_date}; ingest fresh bars first")
             continue
-        if abs(prev / ref - 1) > 1e-6:
-            errors.append(f"{sym}: prev close {prev} != bar close {ref} on {prev_date} (transcription error?)")
+        candidates = [prev] + ([adj] if adj is not None else [])
+        if not any(abs(c / ref - 1) <= 1e-6 for c in candidates):
+            shown = " / ".join(str(c) for c in candidates)
+            errors.append(f"{sym}: prev close {shown} != bar close {ref} on {prev_date} (transcription error?)")
         if not (0 < bid <= ask):
             errors.append(f"{sym}: bad book bid={bid} ask={ask}")
         elif ask / bid - 1 > 0.01:
@@ -101,7 +108,8 @@ def ingest_quotes(path: str | Path, data_dir: str | Path, symbols: list[str], *,
         age = (now - t).total_seconds() / 60
         if age > max_age_minutes or age < -5:
             errors.append(f"{sym}: quote time {ts} is {age:.0f} min old")
-        quotes[sym] = {"bid": bid, "ask": ask, "last": last, "time": ts, "prev_close": prev, "prev_close_date": prev_date}
+        quotes[sym] = {"bid": bid, "ask": ask, "last": last, "time": ts, "prev_close": prev, "prev_close_date": prev_date,
+                       "adj_prev_close": adj}
     missing = [s for s in symbols if s not in quotes]
     if missing:
         errors.append(f"missing quotes for {missing}")

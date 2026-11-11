@@ -26,11 +26,13 @@ account, and the new state is committed back to git. Follow the steps in order. 
    `python -m quantbot ingest-bars <path1> <path2> <path3>`. If a result came back inline instead of as a file, stop.
 2. **Quotes.** Call `get_equity_quotes` twice: the first 11 symbols (SPY…XLK) and the last 10 (XLF…XLC).
    Write `/tmp/quotes.txt` with one line per symbol, copying values exactly from the results:
-   `SYMBOL bid_price ask_price last_trade_price venue_last_trade_time close.price close.date`.
+   `SYMBOL bid_price ask_price last_trade_price venue_last_trade_time close.price close.date adjusted_previous_close`.
    Shorten the time to seconds with a `Z` (e.g. `2026-11-06T18:35:37Z`). If `close` is missing, use
-   `quote.previous_close` and `quote.previous_close_date`. Then run `python -m quantbot ingest-quotes /tmp/quotes.txt`.
+   `quote.previous_close` and `quote.previous_close_date`. The last field is `quote.adjusted_previous_close`:
+   Robinhood's official close and its daily bar sometimes differ by a few cents, and the check accepts
+   an exact match to either. Then run `python -m quantbot ingest-quotes /tmp/quotes.txt`.
    The bot cross-checks every line against the bar data. If it rejects the file, fetch quotes again and retry once.
-   If it fails again, stop without trading.
+   If it fails again, stop without trading. Don't run step 3 after a rejected quote file.
 3. **Trade.** `python -m quantbot run`, which uses `data_provider = "connector"` and paper mode, then `python -m quantbot status`.
 4. **Persist.** `git add data state && git commit -m "paper cycle <date>: <action>" && git push`
    (retry the push up to 4 times with backoff if the network fails).
