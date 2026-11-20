@@ -21,7 +21,7 @@ What we can copy is how a professional quant desk works:
 | Trade only when edge beats cost | Cost-aware mean-variance optimizer (`optimizer.py`, FISTA, no dependencies). An L1 cost term creates a no-trade band, and cost is amortized over the signal's *measured* persistence |
 | Live within a risk budget | Risk aversion is calibrated to a 12% volatility target, with gross and per-name caps |
 | Realistic fills | Half-spread + slippage + square-root market impact (`costs.py`). Paper fills cross the actual bid/ask. Live sends marketable **limit** orders and cancels its own stale ones |
-| Hard risk limits | Kill switch (−25% from peak), 3% daily loss limit, bad-quote filter, per-order notional cap, `max_capital` cap for live |
+| Hard risk limits | Kill switch (−25% from peak), 3% daily loss limit (measured from the previous run's ending equity), bad-quote filter, per-order notional cap, `max_capital` cap for live |
 | Post-trade review | `state/journal.jsonl` logs every decision: forecasts, alpha weights, ICs, targets, orders, fills |
 | Be honest about luck | Block-bootstrap Sharpe confidence interval, probabilistic and **deflated** Sharpe, in-sample/out-of-sample protocol, and a check of whether the alpha overlay adds value net of costs |
 

@@ -45,7 +45,8 @@ class EngineState:
     halted: bool = False
     halted_reason: str = ""
     day_key: str | None = None
-    day_start_equity: float = 0.0
+    day_start_equity: float = 0.0      # reference for the daily loss limit: equity at the end of the previous run
+    last_equity: float | None = None   # equity at the end of the most recent completed (non-dry-run) cycle
 
     @classmethod
     def load(cls, path: Path) -> "EngineState":
@@ -89,6 +90,14 @@ def make_broker(cfg: Config) -> Broker:
     # paper fills cross the (live or modeled) spread explicitly; per-order slippage+impact is passed in
     return PaperBroker(sd, cfg.risk.starting_cash, cfg.costs.slippage_bps, 0.0, ex.fractional,
                        allow_short=not cfg.portfolio.long_only)
+
+
+def _last_logged_equity(path: Path) -> float | None:
+    """Equity from the last row of the equity log (used once, for state files written before last_equity existed)."""
+    if not path.exists():
+        return None
+    rows = list(csv.DictReader(open(path)))
+    return float(rows[-1]["equity"]) if rows else None
 
 
 def _append_csv(path: Path, row: dict) -> None:
@@ -152,7 +161,10 @@ def run_cycle(cfg: Config, broker: Broker | None = None, provider: DataProvider 
 
     day = str(today.date())
     if state.day_key != day:
-        state.day_key, state.day_start_equity = day, equity
+        # Daily P&L is measured from where the book ended the previous run (normally yesterday's run), not from
+        # this run: with one run per day, "today's first mark" is this very run and the limit could never fire.
+        prev = state.last_equity if state.last_equity else _last_logged_equity(state_dir / f"{mode}_equity.csv")
+        state.day_key, state.day_start_equity = day, (prev or equity)
     state.peak_equity = max(state.peak_equity, equity)
     rep.equity, rep.cash = equity, cash
     rep.drawdown = 1 - equity / state.peak_equity if state.peak_equity else 0.0
@@ -204,6 +216,7 @@ def run_cycle(cfg: Config, broker: Broker | None = None, provider: DataProvider 
         cash = broker.available_cash(mids)
         rep.equity, rep.cash = cash + sum(q * mids[s] for s, q in positions.items()), cash
         rep.drawdown = 1 - rep.equity / state.peak_equity if state.peak_equity else 0.0
+        state.last_equity = rep.equity
         state.save()
         _append_csv(state_dir / f"{mode}_equity.csv", {
             "ts": rep.ts, "equity": round(rep.equity, 2), "cash": round(cash, 2), "peak": round(state.peak_equity, 2),

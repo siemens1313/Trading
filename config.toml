@@ -71,6 +71,6 @@ limit_buffer_bps = 10.0   # live: marketable limit = ask*(1+buffer) / bid*(1-buf
 starting_cash = 100000.0
 max_capital = 1000.0          # LIVE ONLY: hard cap on dollars the bot manages
 kill_switch_drawdown = 0.25   # flatten + halt if equity falls 25% from peak
-daily_loss_limit = 0.03       # stop trading for the day if down 3% from the day's first mark
+daily_loss_limit = 0.03       # no new trades today if equity is down 3% from the end of the previous run
 max_order_notional = 50000.0
 max_price_deviation = 0.10    # reject trades whose quote is >10% away from the last close

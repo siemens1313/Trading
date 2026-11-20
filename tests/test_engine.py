@@ -82,3 +82,30 @@ def test_market_hours():
     assert market_open(datetime(2026, 11, 6, 10, 0, tzinfo=NY))
     assert not market_open(datetime(2026, 11, 6, 16, 0, tzinfo=NY))
     assert not market_open(datetime(2026, 11, 7, 12, 0, tzinfo=NY))
+
+
+def test_daily_loss_limit_measures_from_previous_run(cfg):
+    """Regression: with one run per day the limit used to compare today's equity with itself (always 0%).
+    A loss since yesterday's run must now block trading on the first run of the new day."""
+    bars = synth_bars(n=700, seed=1)
+    run_cycle(cfg, provider=FakeProvider(bars), now=NOW)                    # day 1: invest
+    cfg.risk.max_price_deviation = 1.0
+    r = run_cycle(cfg, provider=FakeProvider(bars, price_mult=0.95), now=NOW.replace(day=5))  # next day, -5%
+    assert r.day_pnl < -cfg.risk.daily_loss_limit
+    assert r.action.startswith("daily loss limit") and not r.fills
+    r2 = run_cycle(cfg, provider=FakeProvider(bars, price_mult=0.95), now=NOW.replace(day=6))  # flat vs. yesterday
+    assert abs(r2.day_pnl) < 1e-9 and r2.action == "rebalance"
+
+
+def test_daily_loss_reference_falls_back_to_equity_log(cfg):
+    """State files written before last_equity existed fall back to the last row of the equity log."""
+    bars = synth_bars(n=700, seed=1)
+    r1 = run_cycle(cfg, provider=FakeProvider(bars), now=NOW)
+    p = cfg.path("state") / "engine_state.json"
+    st = EngineState.load(p)
+    st.last_equity = None
+    st.save()
+    cfg.risk.max_price_deviation = 1.0
+    r2 = run_cycle(cfg, provider=FakeProvider(bars, price_mult=0.98), now=NOW.replace(day=5), dry_run=True)
+    assert r2.day_pnl < -0.01                                   # the old behaviour would report 0% here
+    assert r2.day_pnl == pytest.approx(r2.equity / round(r1.equity, 2) - 1, abs=1e-9)  # log keeps cents
