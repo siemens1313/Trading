@@ -1,10 +1,10 @@
 {
-  "last_rebalance_key": "2026-11-24",
-  "last_rebalance_at": "2026-11-24T13:48:46-05:00",
+  "last_rebalance_key": "2026-11-25",
+  "last_rebalance_at": "2026-11-25T13:49:05-05:00",
   "peak_equity": 102063.46831332466,
   "halted": false,
   "halted_reason": "",
-  "day_key": "2026-11-24",
-  "day_start_equity": 96504.24109295,
-  "last_equity": 97091.14785507717
+  "day_key": "2026-11-25",
+  "day_start_equity": 97091.14785507717,
+  "last_equity": 97907.65163989126
 }
